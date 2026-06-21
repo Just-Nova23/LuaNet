@@ -17,7 +17,7 @@ access is enabled.
 - Android 10+ and ARM64 only.
 - Luanti 5.0 through 5.16, one maintained patch release per minor.
 - LAN hosting works offline without an account or ads.
-- Free public sessions last four hours and stop after 15 idle minutes.
+- Free public sessions last four hours. LAN has no mandatory idle timeout; per-server Auto off is optional.
 - Premium allows five active sessions per account and removes ads and timeouts.
 - No world, chat, mod, or player data is uploaded to the control plane.
 
@@ -31,4 +31,3 @@ Moldtelecom forwarding, DNS, TLS, and load testing are complete.
 
 Original LuaNet code is Apache-2.0. Code derived from or linked into Luanti is
 LGPL-2.1-or-later and is kept under `engine/`. See [NOTICE](NOTICE).
-

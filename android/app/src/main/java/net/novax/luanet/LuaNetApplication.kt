@@ -13,10 +13,11 @@ class LuaNetApplication : Application() {
 }
 
 class AppContainer(application: Application) {
-    val database = Room.databaseBuilder(application, LuaNetDatabase::class.java, "luanet.db").build()
+    val database = Room.databaseBuilder(application, LuaNetDatabase::class.java, "luanet.db")
+        .addMigrations(LuaNetDatabase.MIGRATION_1_2)
+        .build()
     val servers = ServerRepository(application, database.dao())
     val contentDb = ContentDbClient()
     val zipImporter = SafeZipImporter()
     val backups = BackupManager(servers.backupDirectory(), database.dao())
 }
-

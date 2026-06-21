@@ -82,6 +82,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
         is Destination.Dashboard -> Dashboard(
             profile = profiles.firstOrNull { it.id == current.id },
             onBack = { destination = Destination.Servers },
+            onUpdateAutoOff = viewModel::updateAutoOff,
         )
     }
 }
@@ -177,7 +178,11 @@ private fun Toggle(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun Dashboard(profile: ServerProfileEntity?, onBack: () -> Unit) {
+private fun Dashboard(
+    profile: ServerProfileEntity?,
+    onBack: () -> Unit,
+    onUpdateAutoOff: (String, Boolean, Int) -> Unit,
+) {
     if (profile == null) return
     val context = LocalContext.current
     val sessions by RuntimeRegistry.sessions.collectAsStateWithLifecycle()
@@ -196,9 +201,46 @@ private fun Dashboard(profile: ServerProfileEntity?, onBack: () -> Unit) {
                 1 -> LazyColumn(Modifier.padding(16.dp)) { items(runtime?.logs.orEmpty()) { Text(it, style = MaterialTheme.typography.bodySmall) } }
                 2 -> LazyColumn(Modifier.padding(16.dp)) { items(runtime?.players?.toList().orEmpty()) { Text(it) } }
                 3 -> Placeholder("Install games and mods from ContentDB or import a validated ZIP.")
-                4 -> Placeholder("Network, allowlist, HTTP mod permissions, battery, and thermal settings.")
+                4 -> AutoOffSettings(profile, onUpdateAutoOff)
                 5 -> Placeholder("Automatic backups are retained before content or engine changes.")
             }
+        }
+    }
+}
+
+@Composable
+private fun AutoOffSettings(
+    profile: ServerProfileEntity,
+    onSave: (String, Boolean, Int) -> Unit,
+) {
+    var enabled by remember(profile.id, profile.autoOffEnabled) { mutableStateOf(profile.autoOffEnabled) }
+    var minutes by remember(profile.id, profile.autoOffMinutes) { mutableStateOf(profile.autoOffMinutes.toString()) }
+    val parsedMinutes = minutes.toIntOrNull()
+    LazyColumn(
+        Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        item { Text("Auto off", style = MaterialTheme.typography.headlineSmall) }
+        item { Toggle("Stop when nobody is connected", enabled) { enabled = it } }
+        item {
+            TextField(
+                value = minutes,
+                onValueChange = { minutes = it.filter(Char::isDigit).take(4) },
+                enabled = enabled,
+                label = { Text("Minutes with no players") },
+                supportingText = { Text("From 1 minute to 24 hours. Disabled by default.") },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            Button(
+                onClick = { onSave(profile.id, enabled, parsedMinutes ?: profile.autoOffMinutes) },
+                enabled = !enabled || (parsedMinutes != null && parsedMinutes in 1..1_440),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Save auto off") }
+        }
+        item {
+            Text("LAN servers have no mandatory idle timeout. Free public tunnels still expire after four hours.")
         }
     }
 }
@@ -236,4 +278,3 @@ private fun openLuanti(context: Context) {
     val launch = context.packageManager.getLaunchIntentForPackage("net.minetest.minetest")
     if (launch != null) context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
-

@@ -9,7 +9,6 @@ enum class SubscriptionTier { FREE, PREMIUM }
 data class RuntimeLimits(
     val activeServers: Int,
     val publicSessionMillis: Long?,
-    val idleTimeoutMillis: Long?,
     val showAds: Boolean,
 )
 
@@ -17,16 +16,13 @@ object EntitlementPolicy {
     val free = RuntimeLimits(
         activeServers = 1,
         publicSessionMillis = 4 * 60 * 60 * 1000L,
-        idleTimeoutMillis = 15 * 60 * 1000L,
         showAds = true,
     )
     val premium = RuntimeLimits(
         activeServers = 5,
         publicSessionMillis = null,
-        idleTimeoutMillis = null,
         showAds = false,
     )
 
     fun forTier(tier: SubscriptionTier) = if (tier == SubscriptionTier.PREMIUM) premium else free
 }
-

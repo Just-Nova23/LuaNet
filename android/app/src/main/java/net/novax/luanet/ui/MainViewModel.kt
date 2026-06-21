@@ -27,5 +27,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onCreated(profile.id)
         }
     }
-}
 
+    fun updateAutoOff(profileId: String, enabled: Boolean, minutes: Int) {
+        viewModelScope.launch { repository.updateAutoOff(profileId, enabled, minutes) }
+    }
+}

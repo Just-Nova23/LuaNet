@@ -204,11 +204,17 @@ class OrchestratorService : Service() {
 
     private val idleCheck = object : Runnable {
         override fun run() {
-            if (entitlement.current() == net.novax.luanet.domain.SubscriptionTier.FREE) {
-                val timeout = EntitlementPolicy.free.idleTimeoutMillis ?: Long.MAX_VALUE
+            val activeSessions = sessions.toMap()
+            scope.launch {
                 val now = System.currentTimeMillis()
-                sessions.filterValues { engine -> engine.emptySince?.let { now - it >= timeout } == true }
-                    .keys.toList().forEach(::stopProfile)
+                activeSessions.forEach { (profileId, engine) ->
+                    val profile = repository.profile(profileId) ?: return@forEach
+                    if (!profile.autoOffEnabled) return@forEach
+                    val idleFor = engine.emptySince?.let(now::minus) ?: return@forEach
+                    if (idleFor >= profile.autoOffMinutes * 60_000L) {
+                        mainHandler.post { stopProfile(profileId) }
+                    }
+                }
             }
             mainHandler.postDelayed(this, 60_000)
         }

@@ -26,6 +26,8 @@ data class ServerProfileEntity(
     val publicEnabled: Boolean,
     val publicHost: String?,
     val publicPort: Int?,
+    val autoOffEnabled: Boolean,
+    val autoOffMinutes: Int,
     val createdAt: Long,
     val updatedAt: Long,
 )
@@ -70,4 +72,3 @@ data class BackupEntity(
     val createdAt: Long,
     val sizeBytes: Long,
 )
-

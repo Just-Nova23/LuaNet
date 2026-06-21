@@ -30,6 +30,7 @@ class ServerRepository(private val context: Context, private val dao: LuaNetDao)
             gameKey = null, mapgen = "v7", maxPlayers = maxPlayers, creative = creative,
             damage = damage, pvp = pvp, accessMode = AccessMode.OPEN, state = ServerState.STOPPED,
             localPort = null, publicEnabled = false, publicHost = null, publicPort = null,
+            autoOffEnabled = false, autoOffMinutes = 15,
             createdAt = now, updatedAt = now,
         )
         profileDirectory(profile.id).mkdirs()
@@ -41,6 +42,16 @@ class ServerRepository(private val context: Context, private val dao: LuaNetDao)
     suspend fun activeProfiles() = dao.activeProfiles()
     suspend fun updateRuntime(id: String, state: ServerState, port: Int?) = dao.updateRuntime(id, state, port, System.currentTimeMillis())
 
+    suspend fun updateAutoOff(id: String, enabled: Boolean, minutes: Int) {
+        require(minutes in 1..1_440) { "Auto off must be between 1 minute and 24 hours" }
+        val profile = requireNotNull(dao.profile(id)) { "Server profile not found" }
+        dao.updateProfile(profile.copy(
+            autoOffEnabled = enabled,
+            autoOffMinutes = minutes,
+            updatedAt = System.currentTimeMillis(),
+        ))
+    }
+
     suspend fun upgradeEngine(profile: ServerProfileEntity, target: String): ServerProfileEntity {
         require(EngineCatalog.canUpgrade(profile.engineVersion, target)) { "Engine downgrade is not supported" }
         val updated = profile.copy(engineVersion = target, updatedAt = System.currentTimeMillis())
@@ -51,4 +62,3 @@ class ServerRepository(private val context: Context, private val dao: LuaNetDao)
     fun profileDirectory(id: String): File = File(context.getExternalFilesDir(null) ?: context.filesDir, "servers/$id")
     fun backupDirectory(): File = File(context.getExternalFilesDir(null) ?: context.filesDir, "backups")
 }
-
