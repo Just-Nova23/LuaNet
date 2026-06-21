@@ -14,6 +14,11 @@ import (
 
 type Authenticator interface {
 	Authenticate(context.Context, string) (model.Principal, error)
+	DeleteUser(context.Context, string) error
+}
+
+func (f *Firebase) DeleteUser(ctx context.Context, userID string) error {
+	return f.client.DeleteUser(ctx, userID)
 }
 
 type Firebase struct{ client *firebaseauth.Client }
@@ -53,6 +58,8 @@ func (Development) Authenticate(_ context.Context, bearer string) (model.Princip
 	}
 	return model.Principal{UserID: strings.TrimPrefix(bearer, "dev:"), EmailVerified: true}, nil
 }
+
+func (Development) DeleteUser(context.Context, string) error { return nil }
 
 func Middleware(a Authenticator, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

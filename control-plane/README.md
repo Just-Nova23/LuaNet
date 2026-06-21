@@ -18,11 +18,14 @@ curl -X POST http://localhost:8080/v1/tunnel-holds \
 
 Production refuses to start without a Firebase project. Google Play purchase
 verification is enabled only when application-default credentials are present.
+Account deletion first revokes all LuaNet allocations and entitlements, then removes the
+Firebase Auth user.
 
 ## FRP plugin
 
 Configure FRPS to call `POST /internal/frp-plugin` for `Login`, `NewProxy`,
 `Ping`, `NewWorkConn`, and `CloseProxy`. The client must set its FRP `user` to
 the lease ID and send `session_token` in user metadata. `NewProxy` is accepted
-only when it requests the exact assigned UDP port.
-
+only when it requests the exact assigned UDP port. FRP 0.69 sends `NewProxy` fields at the
+top level of `content`; the plugin also accepts the older nested shape for test/backward
+compatibility and forces the bandwidth limit into server mode.

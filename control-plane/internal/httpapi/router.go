@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -107,6 +108,10 @@ func (a *API) deleteAccount(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
+	if err := a.auth.DeleteUser(r.Context(), principal.UserID); err != nil {
+		respond(w, nil, err)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -136,7 +141,11 @@ func respond(w http.ResponseWriter, value any, err error) {
 		case errors.Is(err, model.ErrInvalidPurchase):
 			status = http.StatusUnprocessableEntity
 		}
-		http.Error(w, err.Error(), status)
+		message := "internal server error"
+		if status < http.StatusInternalServerError {
+			message = err.Error()
+		}
+		http.Error(w, message, status)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -152,4 +161,22 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
-func requestLog(next http.Handler) http.Handler { return next }
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func requestLog(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		wrapped := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(wrapped, r)
+		slog.Info("HTTP request", "method", r.Method, "path", r.URL.Path,
+			"status", wrapped.status, "duration_ms", time.Since(started).Milliseconds())
+	})
+}

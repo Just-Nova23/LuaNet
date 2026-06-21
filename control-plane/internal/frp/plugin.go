@@ -46,12 +46,23 @@ func (p *Plugin) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if proxy == nil {
 			proxy = nestedMap(req.Content, "proxyConf")
 		}
-		proxyType, _ := proxy["type"].(string)
+		if proxy == nil {
+			proxy = req.Content
+		}
+		proxyType, _ := proxy["proxy_type"].(string)
+		if proxyType == "" {
+			proxyType, _ = proxy["type"].(string)
+		}
 		remotePort := intValue(proxy, "remote_port", "remotePort")
 		if strings.ToLower(proxyType) != "udp" || remotePort != lease.Port {
 			write(w, response{Reject: true, RejectReason: fmt.Sprintf("only assigned UDP port %d is allowed", lease.Port), Unchange: true})
 			return
 		}
+		// FRPS applies this limit, even if a modified client omits or raises it.
+		req.Content["bandwidth_limit"] = "10MB"
+		req.Content["bandwidth_limit_mode"] = "server"
+		write(w, response{Reject: false, Unchange: false, Content: req.Content})
+		return
 	}
 	switch op {
 	case "Login", "NewProxy", "Ping", "NewWorkConn", "CloseProxy":

@@ -226,6 +226,19 @@ func (p *Postgres) ValidateSession(ctx context.Context, id, suppliedHash string,
 	if err != nil {
 		return model.Lease{}, err
 	}
+	if lease.Tier == model.TierFree {
+		var retainedID string
+		err = tx.QueryRowContext(ctx, `
+			SELECT id FROM tunnel_allocations
+			WHERE user_id=$1 AND state='active'
+			ORDER BY created_at,id LIMIT 1`, lease.UserID).Scan(&retainedID)
+		if err != nil {
+			return model.Lease{}, err
+		}
+		if retainedID != lease.ID {
+			return model.Lease{}, model.ErrLimitReached
+		}
+	}
 	if !lease.ExpiresAt.After(now) {
 		return model.Lease{}, model.ErrExpired
 	}

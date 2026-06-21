@@ -42,12 +42,16 @@ func TestPluginAcceptsAssignedUDPProxy(t *testing.T) {
 	st := &sessionStore{lease: model.Lease{ID: "lease", Port: 30042, SessionHash: service.HashSessionToken(token)}}
 	svc := service.New(st, config.Config{})
 	body := map[string]any{"content": map[string]any{
-		"user":       map[string]any{"user": "lease", "metas": map[string]any{"session_token": token}},
-		"proxy_conf": map[string]any{"type": "udp", "remotePort": 30042},
+		"user":        map[string]any{"user": "lease", "metas": map[string]any{"session_token": token}},
+		"proxy_type":  "udp",
+		"remote_port": 30042,
 	}}
 	result := callPlugin(t, New(svc), "NewProxy", body)
 	if result.Reject {
 		t.Fatalf("valid proxy rejected: %+v", result)
+	}
+	if result.Unchange || result.Content["bandwidth_limit"] != "10MB" || result.Content["bandwidth_limit_mode"] != "server" {
+		t.Fatalf("server-side bandwidth limit not enforced: %+v", result)
 	}
 }
 
@@ -56,8 +60,9 @@ func TestPluginRejectsDifferentPort(t *testing.T) {
 	st := &sessionStore{lease: model.Lease{ID: "lease", Port: 30042, SessionHash: service.HashSessionToken(token)}}
 	svc := service.New(st, config.Config{})
 	body := map[string]any{"content": map[string]any{
-		"user":       map[string]any{"user": "lease", "metas": map[string]any{"session_token": token}},
-		"proxy_conf": map[string]any{"type": "udp", "remotePort": 30043},
+		"user":        map[string]any{"user": "lease", "metas": map[string]any{"session_token": token}},
+		"proxy_type":  "udp",
+		"remote_port": 30043,
 	}}
 	result := callPlugin(t, New(svc), "NewProxy", body)
 	if !result.Reject {
