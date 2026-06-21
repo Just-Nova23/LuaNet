@@ -4,10 +4,15 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.Manifest
+import android.app.Activity
+import android.content.pm.PackageManager
+import android.os.Build
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,32 +20,54 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.DateRange as Backup
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Share as Cloud
+import androidx.compose.material.icons.filled.Share as ContentCopy
+import androidx.compose.material.icons.filled.Home as Dashboard
+import androidx.compose.material.icons.filled.AddCircle as FolderZip
+import androidx.compose.material.icons.filled.Person as Group
+import androidx.compose.material.icons.filled.Share as Lan
+import androidx.compose.material.icons.filled.Build as Memory
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Close as Stop
+import androidx.compose.material.icons.filled.List as Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.Switch
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -49,10 +76,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import net.novax.luanet.data.db.ServerProfileEntity
+import net.novax.luanet.R
 import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.ServerState
@@ -96,26 +131,92 @@ fun LuaNetApp(viewModel: MainViewModel) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServerList(profiles: List<ServerProfileEntity>, onCreate: () -> Unit, onOpen: (String) -> Unit) {
+    val activeCount = profiles.count { it.state in setOf(ServerState.STARTING, ServerState.RUNNING) }
     Scaffold(
-        topBar = { TopAppBar(title = { Text("LuaNet") }) },
-        floatingActionButton = { FloatingActionButton(onClick = onCreate) { Icon(Icons.Default.Add, "New server") } },
+        topBar = { TopAppBar(title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Icon(painterResource(R.drawable.ic_luanet), null, Modifier.padding(7.dp).size(28.dp), tint = Color.Unspecified)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text("LuaNet", style = MaterialTheme.typography.titleLarge)
+                    Text("On-device Luanti hosting", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }) },
+        floatingActionButton = {
+            if (profiles.isNotEmpty()) FloatingActionButton(onClick = onCreate) { Icon(Icons.Default.Add, "New server") }
+        },
     ) { padding ->
         if (profiles.isEmpty()) {
-            Column(Modifier.fillMaxSize().padding(padding).padding(24.dp), verticalArrangement = Arrangement.Center) {
-                Text("Host a Luanti world from this phone", style = MaterialTheme.typography.headlineMedium)
-                Spacer(Modifier.height(12.dp))
-                Text("Create a server, install a game from ContentDB, and share it over LAN or NovaX.")
-                Spacer(Modifier.height(20.dp))
-                Button(onClick = onCreate) { Text("Create first server") }
+            LazyColumn(
+                Modifier.fillMaxSize().padding(padding).padding(horizontal = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+            ) {
+                item { Spacer(Modifier.height(28.dp)) }
+                item {
+                    Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.primaryContainer) {
+                        Box(Modifier.fillMaxWidth().height(190.dp), contentAlignment = Alignment.Center) {
+                            Icon(painterResource(R.drawable.ic_luanet), "LuaNet logo", Modifier.size(116.dp), tint = Color.Unspecified)
+                        }
+                    }
+                }
+                item {
+                    AssistChip(onClick = {}, label = { Text("Runs entirely on your phone") },
+                        leadingIcon = { Icon(Icons.Default.CheckCircle, null, Modifier.size(18.dp)) })
+                    Spacer(Modifier.height(12.dp))
+                    Text("Your world.\nYour server.", style = MaterialTheme.typography.displaySmall)
+                    Spacer(Modifier.height(10.dp))
+                    Text("Host Luanti over LAN for free, then add a NovaX public address only when you need it.",
+                        style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                            FeatureLine(Icons.Default.Memory, "17 engine versions", "From 5.0.1 through 5.16.1")
+                            HorizontalDivider()
+                            FeatureLine(Icons.Default.Lan, "LAN without an account", "No ads and no mandatory idle stop")
+                            HorizontalDivider()
+                            FeatureLine(Icons.Default.Cloud, "Optional public tunnel", "A stable NovaX host and assigned UDP port")
+                        }
+                    }
+                }
+                item {
+                    Button(onClick = onCreate, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                        Text("Create your first server")
+                        Spacer(Modifier.width(8.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowForward, null)
+                    }
+                }
+                item { Spacer(Modifier.height(24.dp)) }
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(padding), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                item {
+                    Column(Modifier.padding(horizontal = 20.dp, vertical = 18.dp)) {
+                        Text("Servers", style = MaterialTheme.typography.headlineMedium)
+                        Text("$activeCount active · ${profiles.size} saved", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
                 items(profiles, key = { it.id }) { profile ->
-                    Card(onClick = { onOpen(profile.id) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                        Column(Modifier.padding(16.dp)) {
-                            Text(profile.name, style = MaterialTheme.typography.titleLarge)
-                            Text("Luanti ${profile.engineVersion} · ${profile.state.name.lowercase()}")
-                            Text(profile.gameKey ?: "Game not installed", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Card(
+                        onClick = { onOpen(profile.id) },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                    ) {
+                        Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(12.dp).background(stateColor(profile.state), CircleShape))
+                            Spacer(Modifier.width(14.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(profile.name, style = MaterialTheme.typography.titleLarge)
+                                Spacer(Modifier.height(4.dp))
+                                Text(profile.gameKey?.substringAfter('/') ?: "Install a game to begin",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("Luanti ${profile.engineVersion} · ${profile.state.name.lowercase()}",
+                                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -123,6 +224,25 @@ private fun ServerList(profiles: List<ServerProfileEntity>, onCreate: () -> Unit
             }
         }
     }
+}
+
+@Composable
+private fun FeatureLine(icon: ImageVector, title: String, detail: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+            Icon(icon, null, Modifier.padding(9.dp).size(20.dp), tint = MaterialTheme.colorScheme.primary)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column { Text(title, fontWeight = FontWeight.SemiBold); Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }
+}
+
+@Composable
+private fun stateColor(state: ServerState) = when (state) {
+    ServerState.RUNNING -> MaterialTheme.colorScheme.primary
+    ServerState.STARTING, ServerState.STOPPING -> MaterialTheme.colorScheme.tertiary
+    ServerState.CRASHED -> MaterialTheme.colorScheme.error
+    ServerState.STOPPED -> MaterialTheme.colorScheme.outline
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -141,23 +261,55 @@ private fun CreateServer(
     Scaffold(topBar = { TopAppBar(title = { Text("Create server") }, navigationIcon = {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
     }) }) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            item { TextField(name, { name = it }, label = { Text("Server name") }, modifier = Modifier.fillMaxWidth()) }
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             item {
-                Button(onClick = { showVersions = true }, modifier = Modifier.fillMaxWidth()) { Text("Engine $version") }
+                Spacer(Modifier.height(8.dp))
+                Text("Set up the basics", style = MaterialTheme.typography.headlineMedium)
+                Text("You can change content, access and network settings later.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            item { TextField(players, { players = it.filter(Char::isDigit).take(3) }, label = { Text("Maximum players") }, modifier = Modifier.fillMaxWidth()) }
-            item { Toggle("Creative mode", creative) { creative = it } }
-            item { Toggle("Damage", damage) { damage = it } }
-            item { Toggle("PvP", pvp) { pvp = it } }
             item {
-                Text("The server is unlisted and open by default. You can enable an allowlist later.")
-                Spacer(Modifier.height(16.dp))
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                        Text("Identity", style = MaterialTheme.typography.titleMedium)
+                        OutlinedTextField(name, { name = it.take(60) }, label = { Text("Server name") },
+                            supportingText = { Text("Shown in LuaNet and, optionally, the public server list") }, modifier = Modifier.fillMaxWidth())
+                        FilledTonalButton(onClick = { showVersions = true }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Memory, null); Spacer(Modifier.width(8.dp)); Text("Luanti engine $version")
+                        }
+                    }
+                }
+            }
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Gameplay", style = MaterialTheme.typography.titleMedium)
+                        OutlinedTextField(players, { players = it.filter(Char::isDigit).take(3) }, label = { Text("Maximum players") }, modifier = Modifier.fillMaxWidth())
+                        Toggle("Creative mode", "Unlimited items and instant building", creative) { creative = it }
+                        HorizontalDivider()
+                        Toggle("Damage", "Players can lose health", damage) { damage = it }
+                        HorizontalDivider()
+                        Toggle("PvP", "Players can damage each other", pvp) { pvp = it }
+                    }
+                }
+            }
+            item {
+                Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = .35f)),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Lan, null, tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(12.dp))
+                        Text("Starts unlisted and open on LAN. Public access is always opt-in.", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+            item {
                 Button(
                     onClick = { onCreate(name, version, players.toIntOrNull() ?: 8, creative, damage, pvp) },
-                    enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth(),
-                ) { Text("Create server") }
+                    enabled = name.isNotBlank() && (players.toIntOrNull() ?: 0) in 1..100,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) { Text("Create server"); Spacer(Modifier.width(8.dp)); Icon(Icons.AutoMirrored.Filled.ArrowForward, null) }
             }
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
     if (showVersions) AlertDialog(
@@ -175,9 +327,10 @@ private fun CreateServer(
 }
 
 @Composable
-private fun Toggle(label: String, value: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label)
+private fun Toggle(label: String, detail: String? = null, value: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) { Text(label, fontWeight = FontWeight.Medium); if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        Spacer(Modifier.width(12.dp))
         Switch(value, onChange)
     }
 }
@@ -196,23 +349,85 @@ private fun Dashboard(
     val sessions by RuntimeRegistry.sessions.collectAsStateWithLifecycle()
     val runtime = sessions[profile.id]
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf("Overview", "Console", "Players", "Content", "Settings", "Backups")
-    Scaffold(topBar = { TopAppBar(title = { Text(profile.name) }, navigationIcon = {
+    val tabs = listOf(
+        DashboardTab("Overview", Icons.Default.Dashboard), DashboardTab("Console", Icons.Default.Terminal),
+        DashboardTab("Players", Icons.Default.Group), DashboardTab("Content", Icons.Default.FolderZip),
+        DashboardTab("Settings", Icons.Default.Settings), DashboardTab("Backups", Icons.Default.Backup),
+    )
+    Scaffold(topBar = { TopAppBar(title = {
+        Column { Text(profile.name); Text("Luanti ${profile.engineVersion}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    }, navigationIcon = {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
     }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
-            TabRow(selectedTabIndex = selectedTab) {
-                tabs.forEachIndexed { index, title -> Tab(index == selectedTab, { selectedTab = index }, text = { Text(title) }) }
+            LazyRow(Modifier.fillMaxWidth().padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item { Spacer(Modifier.width(10.dp)) }
+                items(tabs) { tab ->
+                    AssistChip(
+                        onClick = { selectedTab = tabs.indexOf(tab) },
+                        label = { Text(tab.label) },
+                        leadingIcon = { Icon(tab.icon, null, Modifier.size(18.dp)) },
+                        colors = if (tabs[selectedTab] == tab) AssistChipDefaults.assistChipColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer,
+                            labelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                            leadingIconContentColor = MaterialTheme.colorScheme.primary,
+                        ) else AssistChipDefaults.assistChipColors(),
+                    )
+                }
+                item { Spacer(Modifier.width(10.dp)) }
             }
+            HorizontalDivider()
             when (selectedTab) {
                 0 -> Overview(profile, runtime?.state, runtime?.localPort ?: profile.localPort, context)
-                1 -> LazyColumn(Modifier.padding(16.dp)) { items(runtime?.logs.orEmpty()) { Text(it, style = MaterialTheme.typography.bodySmall) } }
-                2 -> LazyColumn(Modifier.padding(16.dp)) { items(runtime?.players?.toList().orEmpty()) { Text(it) } }
+                1 -> ConsolePanel(runtime?.logs.orEmpty())
+                2 -> PlayersPanel(runtime?.players?.toList().orEmpty())
                 3 -> ContentPanel(profile, onImportArchive)
                 4 -> AutoOffSettings(profile, onUpdateAutoOff)
                 5 -> BackupPanel(profile, onCreateBackup)
             }
         }
+    }
+}
+
+private data class DashboardTab(val label: String, val icon: ImageVector)
+
+@Composable
+private fun ConsolePanel(logs: List<String>) {
+    if (logs.isEmpty()) {
+        EmptySection(Icons.Default.Terminal, "Console is quiet", "Start the server to see engine logs and run commands.")
+    } else {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            items(logs) { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+    }
+}
+
+@Composable
+private fun PlayersPanel(players: List<String>) {
+    if (players.isEmpty()) {
+        EmptySection(Icons.Default.Group, "No players online", "Connected players will appear here with moderation actions.")
+    } else {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            items(players) { player ->
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                            Text(player.take(1).uppercase(), Modifier.padding(horizontal = 13.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
+                        }
+                        Spacer(Modifier.width(12.dp)); Text(player, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmptySection(icon: ImageVector, title: String, detail: String) {
+    Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) { Icon(icon, null, Modifier.padding(18.dp).size(30.dp), tint = MaterialTheme.colorScheme.primary) }
+        Spacer(Modifier.height(16.dp)); Text(title, style = MaterialTheme.typography.titleLarge)
+        Spacer(Modifier.height(6.dp)); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -280,7 +495,7 @@ private fun AutoOffSettings(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item { Text("Auto off", style = MaterialTheme.typography.headlineSmall) }
-        item { Toggle("Stop when nobody is connected", enabled) { enabled = it } }
+        item { Toggle("Stop when nobody is connected", "Timer starts when the last player leaves", enabled) { enabled = it } }
         item {
             TextField(
                 value = minutes,
@@ -306,24 +521,64 @@ private fun AutoOffSettings(
 
 @Composable
 private fun Overview(profile: ServerProfileEntity, runtimeState: String?, localPort: Int?, context: Context) {
-    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(runtimeState ?: profile.state.name, style = MaterialTheme.typography.headlineSmall)
-        Text("Engine ${profile.engineVersion}")
+    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         val running = runtimeState in setOf("STARTING", "RUNNING") || profile.state in setOf(ServerState.STARTING, ServerState.RUNNING)
-        Button(onClick = {
-            if (running) OrchestratorService.stop(context, profile.id) else OrchestratorService.start(context, profile.id)
-        }, modifier = Modifier.fillMaxWidth()) {
-            Icon(if (running) Icons.Default.Stop else Icons.Default.PlayArrow, null)
-            Text(if (running) " Stop server" else " Start server")
-        }
-        if (localPort != null && localPort > 0) {
-            Text("Same phone: 127.0.0.1:$localPort")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { copy(context, "127.0.0.1:$localPort") }) { Icon(Icons.Default.ContentCopy, null); Text(" Copy") }
-                Button(onClick = { openLuanti(context) }) { Text("Open Luanti") }
+        val state = runtimeState ?: profile.state.name
+        item { Spacer(Modifier.height(4.dp)) }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = if (running) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(20.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(12.dp).background(if (running) MaterialTheme.colorScheme.primary else stateColor(profile.state), CircleShape))
+                        Spacer(Modifier.width(10.dp)); Text(state.lowercase().replaceFirstChar(Char::uppercase), style = MaterialTheme.typography.titleMedium)
+                        Spacer(Modifier.weight(1f)); Text("${profile.maxPlayers} slots", style = MaterialTheme.typography.labelLarge)
+                    }
+                    Spacer(Modifier.height(14.dp))
+                    Text(if (running) "Server is available on this device and your local network." else "Ready when you are.", style = MaterialTheme.typography.bodyLarge)
+                }
             }
         }
-        Text("Public tunnel is optional. LAN hosting never requires an account or advertisement.")
+        if (profile.gameKey == null) item {
+            Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.FolderZip, null, tint = MaterialTheme.colorScheme.tertiary)
+                    Spacer(Modifier.width(12.dp)); Column { Text("Game required", fontWeight = FontWeight.SemiBold); Text("Open Content and import a game ZIP before starting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
+            }
+        }
+        item {
+            Button(onClick = {
+                if (running) OrchestratorService.stop(context, profile.id) else {
+                    requestNotificationPermission(context)
+                    OrchestratorService.start(context, profile.id)
+                }
+            }, enabled = running || profile.gameKey != null, modifier = Modifier.fillMaxWidth().height(58.dp)) {
+                Icon(if (running) Icons.Default.Stop else Icons.Default.PlayArrow, null)
+                Spacer(Modifier.width(8.dp)); Text(if (running) "Stop server" else "Start server")
+            }
+        }
+        if (localPort != null && localPort > 0) item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Lan, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(10.dp)); Text("Local address", style = MaterialTheme.typography.titleMedium) }
+                    Spacer(Modifier.height(10.dp)); Text("127.0.0.1:$localPort", style = MaterialTheme.typography.headlineSmall)
+                    Spacer(Modifier.height(12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(onClick = { copy(context, "127.0.0.1:$localPort") }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy") }
+                        FilledTonalButton(onClick = { openLuanti(context) }) { Text("Open Luanti") }
+                    }
+                }
+            }
+        }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.tertiary); Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) { Text("Public access", style = MaterialTheme.typography.titleMedium); Text("Optional NovaX tunnel · LAN never needs an account or ad", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Text("Off", style = MaterialTheme.typography.labelLarge)
+                }
+            }
+        }
+        item { Spacer(Modifier.height(20.dp)) }
     }
 }
 
@@ -336,4 +591,10 @@ private fun copy(context: Context, text: String) {
 private fun openLuanti(context: Context) {
     val launch = context.packageManager.getLaunchIntentForPackage("net.minetest.minetest")
     if (launch != null) context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
+private fun requestNotificationPermission(context: Context) {
+    if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        (context as? Activity)?.let { ActivityCompat.requestPermissions(it, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41) }
+    }
 }
