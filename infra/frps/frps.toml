@@ -1,0 +1,30 @@
+bindAddr = "0.0.0.0"
+bindPort = 7443
+proxyBindAddr = "0.0.0.0"
+
+transport.maxPoolCount = 1
+transport.tcpMux = true
+transport.tls.force = true
+transport.tls.certFile = "/run/secrets/frps-fullchain.pem"
+transport.tls.keyFile = "/run/secrets/frps-private-key.pem"
+
+allowPorts = [{ start = 30000, end = 30127 }]
+maxPortsPerClient = 1
+udpPacketSize = 1500
+
+webServer.addr = "127.0.0.1"
+webServer.port = 7500
+webServer.pprofEnable = false
+enablePrometheus = true
+
+log.to = "console"
+log.level = "info"
+log.maxDays = 3
+detailedErrorsToClient = false
+
+[[httpPlugins]]
+name = "luanet-lease-authorizer"
+addr = "127.0.0.1:9080"
+path = "/internal/frp-plugin"
+ops = ["Login", "NewProxy", "Ping", "NewWorkConn", "CloseProxy"]
+

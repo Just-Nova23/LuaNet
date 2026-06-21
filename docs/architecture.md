@@ -23,8 +23,8 @@ The Compose application owns profile configuration, package installation,
 backups, auth, ads, and billing. A foreground orchestrator binds up to five
 engine-slot services in separate Android processes. Each slot loads exactly one
 versioned headless Luanti library and communicates through a stable Binder/JNI
-contract. The orchestrator supervises an FRP child process and uses parent-death
-signalling so the relay cannot outlive the foreground service.
+contract. The orchestrator supervises and terminates the FRP child process with the
+foreground service.
 
 The app stores each profile below its own app-scoped directory. Games and mods
 are copied into the profile so backups are self-contained and changes cannot
@@ -45,7 +45,6 @@ for ten minutes before returning to the pool.
 ## Data minimization
 
 PostgreSQL stores Firebase UID, installation identifier, entitlement state,
-lease/port state, aggregate transfer counters, and security audit timestamps.
+lease/port state, and security audit timestamps.
 Player names, chat, packet contents, worlds, games, and mods are never accepted
 by the API. Expired audit records are deleted after 30 days.
-
