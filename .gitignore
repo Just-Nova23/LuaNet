@@ -22,6 +22,8 @@ control-plane/coverage.out
 engine/.cache/
 engine/build/
 engine/sources/
+**/__pycache__/
+*.pyc
 
 # Infrastructure state and secrets
 infra/data/
@@ -32,4 +34,3 @@ infra/secrets/
 # OS files
 .DS_Store
 Thumbs.db
-

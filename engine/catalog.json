@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/luanti-org/luanti.git",
+  "abi": "arm64-v8a",
+  "engines": [
+    {"version":"5.0.1","tag":"5.0.1","commit":"76325d0ba925cfdd18e387ae96d27921136e98e5","library":"luanet_engine_5_0_1","base":false},
+    {"version":"5.1.1","tag":"5.1.1","commit":"c02f13d33f87e030e89a63767f5f96e03fedc6fe","library":"luanet_engine_5_1_1","base":false},
+    {"version":"5.2.0","tag":"5.2.0","commit":"24147d99c00b3b7677a2c2f8f47e036a6371d03b","library":"luanet_engine_5_2_0","base":false},
+    {"version":"5.3.0","tag":"5.3.0","commit":"057f0b82c23d5ad4efe044fe0f0d8753eb3a8bcf","library":"luanet_engine_5_3_0","base":false},
+    {"version":"5.4.1","tag":"5.4.1","commit":"b2596eda32a41a8008b6979d7a29e0c225421a3a","library":"luanet_engine_5_4_1","base":false},
+    {"version":"5.5.1","tag":"5.5.1","commit":"44c2e33c78b54835c153d100487600348bd6dee7","library":"luanet_engine_5_5_1","base":false},
+    {"version":"5.6.1","tag":"5.6.1","commit":"587f6656a4b86346e35da1b43b48b832d3f1b32e","library":"luanet_engine_5_6_1","base":false},
+    {"version":"5.7.0","tag":"5.7.0","commit":"1b95998d11fb0d51fbfeedc56de4ca2191ad3f7a","library":"luanet_engine_5_7_0","base":false},
+    {"version":"5.8.0","tag":"5.8.0","commit":"49ce5a2de633d751080a0c97b802ae48190bf911","library":"luanet_engine_5_8_0","base":false},
+    {"version":"5.9.1","tag":"5.9.1","commit":"71d9f1771c356c377f556748b05d77deb2c6ca86","library":"luanet_engine_5_9_1","base":false},
+    {"version":"5.10.0","tag":"5.10.0","commit":"568f7a8e8fb457c7b7bcfd3211c7f3f0481ed2e7","library":"luanet_engine_5_10_0","base":false},
+    {"version":"5.11.0","tag":"5.11.0","commit":"0cb7735125c4d44026c874fd269669806d8d70d4","library":"luanet_engine_5_11_0","base":false},
+    {"version":"5.12.0","tag":"5.12.0","commit":"8f0838506a83c108ff85f18050ced4f00a51950b","library":"luanet_engine_5_12_0","base":false},
+    {"version":"5.13.0","tag":"5.13.0","commit":"5ab66da6f72e89fe9c9b71b3e952da1676a8e172","library":"luanet_engine_5_13_0","base":false},
+    {"version":"5.14.0","tag":"5.14.0","commit":"6d1a208018b487e6b762d5da4a70c40333ee11a4","library":"luanet_engine_5_14_0","base":false},
+    {"version":"5.15.2","tag":"5.15.2","commit":"044ab8a35be38593aefd8fdde9601cc44754f3cc","library":"luanet_engine_5_15_2","base":false},
+    {"version":"5.16.1","tag":"5.16.1","commit":"5ebd9b57984d5854e0a37fd0125da48e9e59e190","library":"luanet_engine_5_16_1","base":true}
+  ]
+}
