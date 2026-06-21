@@ -1,0 +1,35 @@
+# IDE and local configuration
+.idea/
+.vscode/
+*.iml
+.env
+.env.*
+!.env.example
+
+# Android / Gradle
+.gradle/
+local.properties
+**/build/
+*.apk
+*.aab
+*.apks
+
+# Go
+control-plane/bin/
+control-plane/coverage.out
+
+# Native engine outputs and sources
+engine/.cache/
+engine/build/
+engine/sources/
+
+# Infrastructure state and secrets
+infra/data/
+infra/secrets/
+*.pem
+*.key
+
+# OS files
+.DS_Store
+Thumbs.db
+

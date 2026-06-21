@@ -1,0 +1,10 @@
+LuaNet
+Copyright 2026 NovaX
+
+LuaNet embeds or interoperates with third-party software. Luanti engine
+components and LuaNet's modifications to them are licensed under
+LGPL-2.1-or-later. frp is licensed under Apache-2.0. Complete third-party
+notices and corresponding source archives are produced with release builds.
+
+LuaNet is not affiliated with or endorsed by the Luanti project.
+
