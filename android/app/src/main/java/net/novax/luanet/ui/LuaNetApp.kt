@@ -4,6 +4,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,8 +18,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -50,6 +53,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.novax.luanet.data.db.ServerProfileEntity
+import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.ServerState
 import net.novax.luanet.runtime.OrchestratorService
@@ -83,6 +87,8 @@ fun LuaNetApp(viewModel: MainViewModel) {
             profile = profiles.firstOrNull { it.id == current.id },
             onBack = { destination = Destination.Servers },
             onUpdateAutoOff = viewModel::updateAutoOff,
+            onImportArchive = viewModel::importArchive,
+            onCreateBackup = viewModel::createBackup,
         )
     }
 }
@@ -133,7 +139,7 @@ private fun CreateServer(
     var pvp by remember { mutableStateOf(true) }
     var showVersions by remember { mutableStateOf(false) }
     Scaffold(topBar = { TopAppBar(title = { Text("Create server") }, navigationIcon = {
-        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
     }) }) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             item { TextField(name, { name = it }, label = { Text("Server name") }, modifier = Modifier.fillMaxWidth()) }
@@ -182,6 +188,8 @@ private fun Dashboard(
     profile: ServerProfileEntity?,
     onBack: () -> Unit,
     onUpdateAutoOff: (String, Boolean, Int) -> Unit,
+    onImportArchive: (String, Uri, ImportKind, (Result<String>) -> Unit) -> Unit,
+    onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
 ) {
     if (profile == null) return
     val context = LocalContext.current
@@ -190,7 +198,7 @@ private fun Dashboard(
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf("Overview", "Console", "Players", "Content", "Settings", "Backups")
     Scaffold(topBar = { TopAppBar(title = { Text(profile.name) }, navigationIcon = {
-        IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, "Back") }
+        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
     }) }) { padding ->
         Column(Modifier.fillMaxSize().padding(padding)) {
             TabRow(selectedTabIndex = selectedTab) {
@@ -200,11 +208,62 @@ private fun Dashboard(
                 0 -> Overview(profile, runtime?.state, runtime?.localPort ?: profile.localPort, context)
                 1 -> LazyColumn(Modifier.padding(16.dp)) { items(runtime?.logs.orEmpty()) { Text(it, style = MaterialTheme.typography.bodySmall) } }
                 2 -> LazyColumn(Modifier.padding(16.dp)) { items(runtime?.players?.toList().orEmpty()) { Text(it) } }
-                3 -> Placeholder("Install games and mods from ContentDB or import a validated ZIP.")
+                3 -> ContentPanel(profile, onImportArchive)
                 4 -> AutoOffSettings(profile, onUpdateAutoOff)
-                5 -> Placeholder("Automatic backups are retained before content or engine changes.")
+                5 -> BackupPanel(profile, onCreateBackup)
             }
         }
+    }
+}
+
+@Composable
+private fun ContentPanel(
+    profile: ServerProfileEntity,
+    onImport: (String, Uri, ImportKind, (Result<String>) -> Unit) -> Unit,
+) {
+    var requestedKind by remember { mutableStateOf(ImportKind.GAME) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) onImport(profile.id, uri, requestedKind) { result ->
+            message = result.fold({ it }, { it.message ?: "Import failed" })
+        }
+    }
+    LazyColumn(
+        Modifier.fillMaxSize().padding(20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        item { Text("Import validated ZIP", style = MaterialTheme.typography.headlineSmall) }
+        item { Text("The archive is checked for path traversal, links, expansion size, compression ratio, and Luanti structure.") }
+        items(ImportKind.entries) { kind ->
+            Button(
+                onClick = {
+                    requestedKind = kind
+                    launcher.launch(arrayOf("application/zip", "application/octet-stream"))
+                },
+                enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Import ${kind.name.lowercase()} ZIP") }
+        }
+        message?.let { item { Text(it) } }
+        item { Text("ContentDB browsing and dependency review use the complete catalog, including flagged packages.") }
+    }
+}
+
+@Composable
+private fun BackupPanel(
+    profile: ServerProfileEntity,
+    onCreate: (String, (Result<String>) -> Unit) -> Unit,
+) {
+    var message by remember { mutableStateOf<String?>(null) }
+    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Backups", style = MaterialTheme.typography.headlineSmall)
+        Text("Backups contain the profile world, game, mods, and configuration.")
+        Button(
+            onClick = { onCreate(profile.id) { result -> message = result.fold({ it }, { it.message ?: "Backup failed" }) } },
+            enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text("Create manual backup") }
+        message?.let { Text(it) }
     }
 }
 
