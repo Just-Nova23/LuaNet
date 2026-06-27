@@ -228,7 +228,7 @@ Java_net_novax_luanet_runtime_NativeEngineBridge_run(JNIEnv *env, jobject instan
 	}
 	std::vector<char *> arguments;
 	for (auto &value : values)
-		arguments.push_back(value.data());
+		arguments.push_back(const_cast<char *>(value.c_str()));
 	const int result = main(static_cast<int>(arguments.size()), arguments.data());
 
 	fflush(stdout);
