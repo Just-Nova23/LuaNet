@@ -52,6 +52,7 @@ void initializePathsAndroid()
 
 void copyAssets() {}
 void openURIAndroid(const char *) {}
+void openURIAndroid(const std::string &) {}
 void openURLAndroid(const std::string &) {}
 void shareFileAndroid(const std::string &) {}
 void setPlayingNowNotification(bool) {}
