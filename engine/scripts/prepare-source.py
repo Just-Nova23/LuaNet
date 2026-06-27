@@ -62,6 +62,20 @@ def main() -> None:
         )
         android_header.write_text(header)
 
+    porting_cpp = args.source / "src" / "porting.cpp"
+    if porting_cpp.exists():
+        porting = porting_cpp.read_text()
+        linux_branch = "#elif defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)"
+        if "#elif defined(__ANDROID__)" not in porting and linux_branch in porting:
+            porting = porting.replace(
+                linux_branch,
+                "#elif defined(__ANDROID__)\n\n"
+                "extern bool setSystemPaths(); // defined by LuaNet's headless Android bridge\n\n"
+                f"{linux_branch}",
+                1,
+            )
+            porting_cpp.write_text(porting)
+
 
 if __name__ == "__main__":
     main()
