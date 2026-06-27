@@ -28,8 +28,10 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import net.novax.luanet.LuaNetApplication
 import net.novax.luanet.R
+import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.EntitlementPolicy
+import net.novax.luanet.domain.PackageType
 import net.novax.luanet.domain.ServerState
 import net.novax.luanet.network.TunnelLease
 import java.io.File
@@ -104,6 +106,8 @@ class OrchestratorService : Service() {
         }
         val root = repository.profileDirectory(profile.id).apply { mkdirs() }
         val world = File(root, "world").apply { mkdirs() }
+        val packages = repository.packages(profile.id)
+        writeWorldConfig(world, profile.gameKey, packages, File(root, "mods"))
         val config = File(root, "minetest.conf")
         writeConfig(config, profile.name, port, profile.maxPlayers, profile.creative, profile.damage, profile.pvp)
         val engineConfiguration = EngineConfiguration(
@@ -276,6 +280,57 @@ class OrchestratorService : Service() {
             disallow_empty_password = true
         """.trimIndent())
     }
+
+    private fun writeWorldConfig(world: File, gameKey: String?, packages: List<InstalledPackageEntity>, modsRoot: File) {
+        val existing = File(world, "world.mt")
+        val preserved = linkedMapOf<String, String>()
+        if (existing.isFile) {
+            existing.readLines().forEach { line ->
+                val index = line.indexOf('=')
+                if (index > 0) {
+                    preserved[line.substring(0, index).trim()] = line.substring(index + 1).trim()
+                }
+            }
+        }
+        preserved["backend"] = preserved["backend"] ?: "sqlite3"
+        gameKey?.substringAfter('/')?.takeIf { it.isNotBlank() }?.let { preserved["gameid"] = it }
+        preserved.keys.filter { it.startsWith("load_mod_") }.toList().forEach { preserved.remove(it) }
+        enabledModNames(packages, modsRoot).forEach { modName ->
+            preserved["load_mod_$modName"] = "true"
+        }
+        existing.writeText(preserved.entries.joinToString(separator = "\n", postfix = "\n") { (key, value) -> "$key = $value" })
+    }
+
+    private fun enabledModNames(packages: List<InstalledPackageEntity>, modsRoot: File): List<String> {
+        val names = linkedSetOf<String>()
+        packages.filter { it.enabled && (it.type == PackageType.MOD || it.type == PackageType.MODPACK) }.forEach { item ->
+            val folderName = item.packageKey.substringAfter('/').safeFolderName()
+            val directory = File(modsRoot, folderName)
+            if (item.type == PackageType.MODPACK && directory.isDirectory) {
+                directory.listFiles()?.filter { it.isDirectory }?.forEach { child ->
+                    val detected = modName(child)
+                    if (detected != null) names += detected
+                }
+            } else {
+                names += modName(directory) ?: folderName.safeModName()
+            }
+        }
+        return names.toList()
+    }
+
+    private fun modName(directory: File): String? {
+        val conf = File(directory, "mod.conf")
+        if (conf.isFile) {
+            conf.readLines().firstOrNull { it.trimStart().startsWith("name") }?.let { line ->
+                val value = line.substringAfter('=', "").trim().safeModName()
+                if (value.isNotBlank()) return value
+            }
+        }
+        return directory.name.safeModName().takeIf { it.isNotBlank() }
+    }
+
+    private fun String.safeModName(): String = filter { it.isLetterOrDigit() || it == '_' }.take(80)
+    private fun String.safeFolderName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(80)
 
     private fun slotClass(slot: Int) = arrayOf(
         EngineSlot0Service::class.java, EngineSlot1Service::class.java, EngineSlot2Service::class.java,

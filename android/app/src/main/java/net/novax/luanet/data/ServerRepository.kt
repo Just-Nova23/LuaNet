@@ -57,6 +57,8 @@ class ServerRepository(
 
     suspend fun profile(id: String) = dao.profile(id)
     suspend fun activeProfiles() = dao.activeProfiles()
+    fun observePackages(profileId: String) = dao.observePackages(profileId)
+    suspend fun packages(profileId: String) = dao.packages(profileId)
     suspend fun updateRuntime(id: String, state: ServerState, port: Int?) = dao.updateRuntime(id, state, port, System.currentTimeMillis())
     suspend fun updatePublic(id: String, enabled: Boolean, host: String?, port: Int?) =
         dao.updatePublic(id, enabled, host, port, System.currentTimeMillis())

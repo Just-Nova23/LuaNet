@@ -52,6 +52,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { repository.updateAutoOff(profileId, enabled, minutes) }
     }
 
+    fun installedPackages(profileId: String) = repository.observePackages(profileId)
+
     fun importArchive(profileId: String, uri: Uri, kind: ImportKind, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {

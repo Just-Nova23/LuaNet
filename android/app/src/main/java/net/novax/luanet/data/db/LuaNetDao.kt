@@ -35,6 +35,9 @@ interface LuaNetDao {
     @Query("SELECT * FROM installed_packages WHERE profileId=:profileId ORDER BY type,title")
     fun observePackages(profileId: String): Flow<List<InstalledPackageEntity>>
 
+    @Query("SELECT * FROM installed_packages WHERE profileId=:profileId ORDER BY type,title")
+    suspend fun packages(profileId: String): List<InstalledPackageEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertPackage(item: InstalledPackageEntity)
 

@@ -88,6 +88,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import net.novax.luanet.data.db.ServerProfileEntity
+import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.R
 import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.data.content.ContentPackage
@@ -123,21 +124,25 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 }
             },
         )
-        is Destination.Dashboard -> Dashboard(
-            profile = profiles.firstOrNull { it.id == current.id },
-            onBack = { destination = Destination.Servers },
-            onUpdateAutoOff = viewModel::updateAutoOff,
-            onImportArchive = viewModel::importArchive,
-            onCreateBackup = viewModel::createBackup,
-            contentState = content,
-            onSearchContent = viewModel::searchContent,
-            onInstallContent = viewModel::installContent,
-            accountState = account,
-            onSaveAccountToken = viewModel::saveAccountToken,
-            onSyncEntitlement = viewModel::syncEntitlement,
-            onStartPublicTunnel = viewModel::startPublicTunnel,
-            onStopPublicTunnel = viewModel::stopPublicTunnel,
-        )
+        is Destination.Dashboard -> {
+            val installedPackages by viewModel.installedPackages(current.id).collectAsStateWithLifecycle(emptyList())
+            Dashboard(
+                profile = profiles.firstOrNull { it.id == current.id },
+                installedPackages = installedPackages,
+                onBack = { destination = Destination.Servers },
+                onUpdateAutoOff = viewModel::updateAutoOff,
+                onImportArchive = viewModel::importArchive,
+                onCreateBackup = viewModel::createBackup,
+                contentState = content,
+                onSearchContent = viewModel::searchContent,
+                onInstallContent = viewModel::installContent,
+                accountState = account,
+                onSaveAccountToken = viewModel::saveAccountToken,
+                onSyncEntitlement = viewModel::syncEntitlement,
+                onStartPublicTunnel = viewModel::startPublicTunnel,
+                onStopPublicTunnel = viewModel::stopPublicTunnel,
+            )
+        }
     }
 }
 
@@ -352,6 +357,7 @@ private fun Toggle(label: String, detail: String? = null, value: Boolean, onChan
 @Composable
 private fun Dashboard(
     profile: ServerProfileEntity?,
+    installedPackages: List<InstalledPackageEntity>,
     onBack: () -> Unit,
     onUpdateAutoOff: (String, Boolean, Int) -> Unit,
     onImportArchive: (String, Uri, ImportKind, (Result<String>) -> Unit) -> Unit,
@@ -414,7 +420,7 @@ private fun Dashboard(
                 2 -> PlayersPanel(runtime?.players?.toList().orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
                 }
-                3 -> ContentPanel(profile, contentState, onSearchContent, onInstallContent, onImportArchive)
+                3 -> ContentPanel(profile, installedPackages, contentState, onSearchContent, onInstallContent, onImportArchive)
                 4 -> SettingsPanel(profile, accountState, onUpdateAutoOff, onSaveAccountToken, onSyncEntitlement)
                 5 -> BackupPanel(profile, onCreateBackup)
             }
@@ -515,6 +521,7 @@ private fun EmptySection(icon: ImageVector, title: String, detail: String) {
 @Composable
 private fun ContentPanel(
     profile: ServerProfileEntity,
+    installedPackages: List<InstalledPackageEntity>,
     state: ContentBrowserState,
     onSearch: (String, String, String) -> Unit,
     onInstall: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
@@ -536,6 +543,7 @@ private fun ContentPanel(
     ) {
         item { Text("ContentDB", style = MaterialTheme.typography.headlineMedium) }
         item { Text("Browse the complete catalog. Compatibility is shown as a warning, never hidden.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { InstalledContentSummary(installedPackages) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("game" to "Games", "mod" to "Mods & modpacks").forEach { (value, label) ->
@@ -605,6 +613,36 @@ private fun ContentPanel(
                 onInstall(profile.id, item) { result -> message = result.fold({ it }, { it.message ?: "Install failed" }) }
             }) { Text("Install anyway") } },
         )
+    }
+}
+
+@Composable
+private fun InstalledContentSummary(packages: List<InstalledPackageEntity>) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Installed content", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                Text("${packages.size}", style = MaterialTheme.typography.labelLarge)
+            }
+            if (packages.isEmpty()) {
+                Text("Install a game first, then add mods or import ZIP archives.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                packages.take(6).forEach { item ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(item.title, style = MaterialTheme.typography.bodyLarge)
+                            Text("${item.type.name.lowercase()} · ${item.source.name.lowercase()} · ${item.packageKey}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Surface(shape = CircleShape, color = if (item.enabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer) {
+                            Text(if (item.enabled) "Enabled" else "Off", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+                if (packages.size > 6) {
+                    Text("+${packages.size - 6} more installed items", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
 }
 
