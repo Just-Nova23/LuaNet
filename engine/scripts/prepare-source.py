@@ -43,6 +43,17 @@ def main() -> None:
     )
     cmake.write_text(text.replace(marker, injection + marker, 1))
 
+    android_header = args.source / "src" / "porting_android.h"
+    if android_header.exists():
+        header = android_header.read_text()
+        header = re.sub(
+            r"\n#ifndef SERVER\s*\n(float getDisplayDensity\(\);\s*\nv2u32 getDisplaySize\(\);)\s*\n#endif\s*\n",
+            r"\n\1\n",
+            header,
+            count=1,
+        )
+        android_header.write_text(header)
+
 
 if __name__ == "__main__":
     main()
