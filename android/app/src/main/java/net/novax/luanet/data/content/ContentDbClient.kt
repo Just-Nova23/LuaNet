@@ -5,7 +5,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.HttpUrl
@@ -26,27 +25,42 @@ data class ContentPackage(
     val key: String get() = "$author/$name"
 }
 
+data class ContentDependency(val name: String, val candidates: List<String>)
+
 class ContentDbClient(
     private val http: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
     private val baseUrl: HttpUrl = HttpUrl.Builder().scheme("https").host("content.luanti.org").build(),
 ) {
     suspend fun search(type: String, query: String, engineVersion: String, game: String? = null): List<ContentPackage> {
-        val all = packageQuery(type, query, null, game)
-        val supported = packageQuery(type, query, engineVersion, game).mapTo(hashSetOf()) { it.key }
+        val apiType = apiType(type)
+        val all = packageQuery(apiType, query, null, game)
+        val supported = packageQuery(apiType, query, engineVersion, game).mapTo(hashSetOf()) { it.key }
         return all.map { it.copy(compatible = it.key in supported) }
     }
 
-    suspend fun hardDependencyCandidates(packageKey: String): List<String> {
+    suspend fun hardDependencies(packageKey: String): List<ContentDependency> {
         val url = baseUrl.newBuilder()
             .addPathSegments("api/packages/$packageKey/dependencies/")
             .addQueryParameter("only_hard", "1")
             .build()
         val tree = json.parseToJsonElement(get(url))
-        val candidates = linkedSetOf<String>()
-        collectPackageKeys(tree, candidates)
-        candidates.remove(packageKey)
-        return candidates.toList()
+        val root = tree as? JsonObject ?: return emptyList()
+        val entries = root[packageKey] as? kotlinx.serialization.json.JsonArray ?: return emptyList()
+        return entries.mapNotNull { entry ->
+            val item = entry as? JsonObject ?: return@mapNotNull null
+            if ((item["is_optional"] as? JsonPrimitive)?.content == "true") return@mapNotNull null
+            val name = (item["name"] as? JsonPrimitive)?.content ?: return@mapNotNull null
+            val packages = (item["packages"] as? kotlinx.serialization.json.JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonPrimitive)?.content }.filter { it.count { char -> char == '/' } == 1 }
+            ContentDependency(name, packages)
+        }
+    }
+
+    suspend fun packageByKey(packageKey: String): ContentPackage {
+        require(packageKey.count { it == '/' } == 1) { "Invalid ContentDB package key" }
+        val url = baseUrl.newBuilder().addPathSegments("api/packages/$packageKey/").build()
+        return json.decodeFromString(get(url))
     }
 
     fun downloadUrl(item: ContentPackage): HttpUrl {
@@ -60,7 +74,20 @@ class ContentDbClient(
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("ContentDB download failed: HTTP ${response.code}")
             val body = response.body ?: error("ContentDB returned an empty archive")
-            destination.outputStream().use { body.byteStream().copyTo(it) }
+            if (body.contentLength() > MAX_DOWNLOAD_BYTES) error("ContentDB archive exceeds 512 MB")
+            destination.outputStream().use { output ->
+                body.byteStream().use { input ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_DOWNLOAD_BYTES) error("ContentDB archive exceeds 512 MB")
+                        output.write(buffer, 0, read)
+                    }
+                }
+            }
         }
     }
 
@@ -77,6 +104,13 @@ class ContentDbClient(
         return json.decodeFromString(get(url))
     }
 
+    private fun apiType(type: String) = when (type) {
+        "game", "mod", "txp" -> type
+        // ContentDB exposes Luanti modpacks through the mod package channel.
+        "modpack" -> "mod"
+        else -> error("Unsupported ContentDB package type $type")
+    }
+
     private suspend fun get(url: HttpUrl): String = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).header("User-Agent", "LuaNet/0.1 (+https://github.com/Just-Nova23/LuaNet)").build()
         http.newCall(request).execute().use { response ->
@@ -85,18 +119,5 @@ class ContentDbClient(
         }
     }
 
-    private fun collectPackageKeys(element: JsonElement, output: MutableSet<String>) {
-        when (element) {
-            is JsonObject -> element.forEach { (key, value) ->
-                if (key in setOf("package", "package_key", "key") && value is JsonPrimitive) {
-                    val candidate = value.content
-                    if (candidate.count { it == '/' } == 1) output += candidate
-                }
-                collectPackageKeys(value, output)
-            }
-            is kotlinx.serialization.json.JsonArray -> element.forEach { collectPackageKeys(it, output) }
-            is JsonPrimitive -> if (element.isString && element.content.count { it == '/' } == 1) output += element.content
-        }
-    }
+    companion object { private const val MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024 }
 }
-

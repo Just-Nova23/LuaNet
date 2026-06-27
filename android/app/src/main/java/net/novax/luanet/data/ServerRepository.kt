@@ -12,6 +12,7 @@ import net.novax.luanet.data.db.ServerProfileEntity
 import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.data.importer.ImportResult
 import net.novax.luanet.data.importer.SafeZipImporter
+import net.novax.luanet.data.importer.UnsafeArchiveException
 import net.novax.luanet.domain.AccessMode
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.PackageSource
@@ -68,12 +69,51 @@ class ServerRepository(
         ))
     }
 
-    suspend fun importArchive(profileId: String, source: Uri, expected: ImportKind): ImportResult = withContext(Dispatchers.IO) {
+    suspend fun importArchive(profileId: String, source: Uri, expected: ImportKind): ImportResult =
+        importArchiveInternal(
+            profileId = profileId,
+            source = source,
+            defaultKind = expected,
+            allowedKinds = setOf(expected),
+            metadata = null,
+        )
+
+    suspend fun importContentDbArchive(
+        profileId: String,
+        source: Uri,
+        defaultKind: ImportKind,
+        allowedKinds: Set<ImportKind>,
+        packageKey: String,
+        title: String,
+        releaseId: Long?,
+        compatible: Boolean,
+    ): ImportResult = importArchiveInternal(
+        profileId = profileId,
+        source = source,
+        defaultKind = defaultKind,
+        allowedKinds = allowedKinds,
+        metadata = PackageMetadata(
+            packageKey = packageKey,
+            title = title,
+            source = PackageSource.CONTENT_DB,
+            releaseId = releaseId,
+            compatible = compatible,
+        ),
+    )
+
+    private suspend fun importArchiveInternal(
+        profileId: String,
+        source: Uri,
+        defaultKind: ImportKind,
+        allowedKinds: Set<ImportKind>,
+        metadata: PackageMetadata?,
+    ): ImportResult = withContext(Dispatchers.IO) {
         val profile = requireNotNull(dao.profile(profileId)) { "Server profile not found" }
         require(profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)) { "Stop the server before importing content" }
         val displayName = context.contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
             ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-            ?: "${expected.name.lowercase()}.zip"
+            ?: source.lastPathSegment?.substringAfterLast('/')
+            ?: "${defaultKind.name.lowercase()}.zip"
         val archive = File(context.cacheDir, "import-${UUID.randomUUID()}.zip")
         val root = profileDirectory(profileId)
         val incoming = File(root, ".incoming-${UUID.randomUUID()}")
@@ -91,18 +131,21 @@ class ServerRepository(
                     }
                 }
             } ?: error("Unable to read selected document")
-            val imported = importer.import(archive, incoming, expected)
+            val imported = importer.import(archive, incoming)
+            if (imported.kind !in allowedKinds) {
+                throw UnsafeArchiveException("Expected ${allowedKinds.joinToString(" or ") { it.name.lowercase() }} archive, found ${imported.kind.name.lowercase()}")
+            }
             val identifier = safeIdentifier(displayName.substringBeforeLast('.'))
-            val destination = when (expected) {
+            val destination = when (imported.kind) {
                 ImportKind.WORLD -> File(root, "world")
                 ImportKind.GAME -> File(root, "games/$identifier")
                 ImportKind.MOD, ImportKind.MODPACK -> File(root, "mods/$identifier")
             }
-            require(!destination.exists()) { "${expected.name.lowercase()} '$identifier' is already installed" }
+            require(!destination.exists()) { "${imported.kind.name.lowercase()} '$identifier' is already installed" }
             destination.parentFile?.mkdirs()
             Files.move(incoming.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
-            if (expected != ImportKind.WORLD) {
-                val type = when (expected) {
+            if (imported.kind != ImportKind.WORLD) {
+                val type = when (imported.kind) {
                     ImportKind.GAME -> PackageType.GAME
                     ImportKind.MOD -> PackageType.MOD
                     ImportKind.MODPACK -> PackageType.MODPACK
@@ -110,12 +153,16 @@ class ServerRepository(
                 }
                 dao.upsertPackage(InstalledPackageEntity(
                     id = UUID.randomUUID().toString(), profileId = profileId,
-                    packageKey = "manual/$identifier", title = displayName.substringBeforeLast('.'),
-                    type = type, source = PackageSource.MANUAL_ZIP, releaseId = null,
-                    compatible = true, enabled = true, installedAt = System.currentTimeMillis(),
+                    packageKey = metadata?.packageKey ?: "manual/$identifier",
+                    title = metadata?.title ?: displayName.substringBeforeLast('.'),
+                    type = type,
+                    source = metadata?.source ?: PackageSource.MANUAL_ZIP,
+                    releaseId = metadata?.releaseId,
+                    compatible = metadata?.compatible ?: true,
+                    enabled = true, installedAt = System.currentTimeMillis(),
                 ))
-                if (expected == ImportKind.GAME && profile.gameKey == null) {
-                    dao.updateProfile(profile.copy(gameKey = "manual/$identifier", updatedAt = System.currentTimeMillis()))
+                if (imported.kind == ImportKind.GAME && profile.gameKey == null) {
+                    dao.updateProfile(profile.copy(gameKey = metadata?.packageKey ?: "manual/$identifier", updatedAt = System.currentTimeMillis()))
                 }
             }
             imported.copy(destination = destination)
@@ -137,6 +184,14 @@ class ServerRepository(
 
     private fun safeIdentifier(value: String): String = value.lowercase()
         .replace(Regex("[^a-z0-9_-]+"), "_").trim('_').take(64).ifBlank { "content-${UUID.randomUUID().toString().take(8)}" }
+
+    private data class PackageMetadata(
+        val packageKey: String,
+        val title: String,
+        val source: PackageSource,
+        val releaseId: Long?,
+        val compatible: Boolean,
+    )
 
     companion object { private const val MAX_ARCHIVE_BYTES = 512L * 1024 * 1024 }
 }

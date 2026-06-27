@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.List as Terminal
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange as Backup
 import androidx.compose.material.icons.filled.CheckCircle
@@ -44,7 +45,6 @@ import androidx.compose.material.icons.filled.Build as Memory
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Close as Stop
-import androidx.compose.material.icons.filled.List as Terminal
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -55,6 +55,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -89,6 +90,7 @@ import androidx.core.content.ContextCompat
 import net.novax.luanet.data.db.ServerProfileEntity
 import net.novax.luanet.R
 import net.novax.luanet.data.importer.ImportKind
+import net.novax.luanet.data.content.ContentPackage
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.ServerState
 import net.novax.luanet.runtime.OrchestratorService
@@ -103,6 +105,7 @@ private sealed interface Destination {
 @Composable
 fun LuaNetApp(viewModel: MainViewModel) {
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
+    val content by viewModel.content.collectAsStateWithLifecycle()
     var destination: Destination by remember { mutableStateOf(Destination.Servers) }
     when (val current = destination) {
         Destination.Servers -> ServerList(
@@ -124,6 +127,9 @@ fun LuaNetApp(viewModel: MainViewModel) {
             onUpdateAutoOff = viewModel::updateAutoOff,
             onImportArchive = viewModel::importArchive,
             onCreateBackup = viewModel::createBackup,
+            contentState = content,
+            onSearchContent = viewModel::searchContent,
+            onInstallContent = viewModel::installContent,
         )
     }
 }
@@ -343,6 +349,9 @@ private fun Dashboard(
     onUpdateAutoOff: (String, Boolean, Int) -> Unit,
     onImportArchive: (String, Uri, ImportKind, (Result<String>) -> Unit) -> Unit,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
+    contentState: ContentBrowserState,
+    onSearchContent: (String, String, String) -> Unit,
+    onInstallContent: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
 ) {
     if (profile == null) return
     val context = LocalContext.current
@@ -350,7 +359,7 @@ private fun Dashboard(
     val runtime = sessions[profile.id]
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf(
-        DashboardTab("Overview", Icons.Default.Dashboard), DashboardTab("Console", Icons.Default.Terminal),
+        DashboardTab("Overview", Icons.Default.Dashboard), DashboardTab("Console", Icons.AutoMirrored.Filled.Terminal),
         DashboardTab("Players", Icons.Default.Group), DashboardTab("Content", Icons.Default.FolderZip),
         DashboardTab("Settings", Icons.Default.Settings), DashboardTab("Backups", Icons.Default.Backup),
     )
@@ -381,7 +390,7 @@ private fun Dashboard(
                 0 -> Overview(profile, runtime?.state, runtime?.localPort ?: profile.localPort, context)
                 1 -> ConsolePanel(runtime?.logs.orEmpty())
                 2 -> PlayersPanel(runtime?.players?.toList().orEmpty())
-                3 -> ContentPanel(profile, onImportArchive)
+                3 -> ContentPanel(profile, contentState, onSearchContent, onInstallContent, onImportArchive)
                 4 -> AutoOffSettings(profile, onUpdateAutoOff)
                 5 -> BackupPanel(profile, onCreateBackup)
             }
@@ -394,7 +403,7 @@ private data class DashboardTab(val label: String, val icon: ImageVector)
 @Composable
 private fun ConsolePanel(logs: List<String>) {
     if (logs.isEmpty()) {
-        EmptySection(Icons.Default.Terminal, "Console is quiet", "Start the server to see engine logs and run commands.")
+        EmptySection(Icons.AutoMirrored.Filled.Terminal, "Console is quiet", "Start the server to see engine logs and run commands.")
     } else {
         LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             items(logs) { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -434,10 +443,16 @@ private fun EmptySection(icon: ImageVector, title: String, detail: String) {
 @Composable
 private fun ContentPanel(
     profile: ServerProfileEntity,
+    state: ContentBrowserState,
+    onSearch: (String, String, String) -> Unit,
+    onInstall: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
     onImport: (String, Uri, ImportKind, (Result<String>) -> Unit) -> Unit,
 ) {
+    var type by remember(profile.id) { mutableStateOf("game") }
+    var query by remember(profile.id) { mutableStateOf("") }
     var requestedKind by remember { mutableStateOf(ImportKind.GAME) }
     var message by remember { mutableStateOf<String?>(null) }
+    var pendingInstall by remember { mutableStateOf<ContentPackage?>(null) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) onImport(profile.id, uri, requestedKind) { result ->
             message = result.fold({ it }, { it.message ?: "Import failed" })
@@ -447,10 +462,48 @@ private fun ContentPanel(
         Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item { Text("Import validated ZIP", style = MaterialTheme.typography.headlineSmall) }
-        item { Text("The archive is checked for path traversal, links, expansion size, compression ratio, and Luanti structure.") }
+        item { Text("ContentDB", style = MaterialTheme.typography.headlineMedium) }
+        item { Text("Browse the complete catalog. Compatibility is shown as a warning, never hidden.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf("game" to "Games", "mod" to "Mods & modpacks").forEach { (value, label) ->
+                    AssistChip(onClick = { type = value }, label = { Text(label) },
+                        colors = if (type == value) AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else AssistChipDefaults.assistChipColors())
+                }
+            }
+        }
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(query, { query = it.take(80) }, label = { Text("Search ContentDB") }, singleLine = true, modifier = Modifier.weight(1f))
+                FilledTonalButton(onClick = { onSearch(profile.id, type, query) }, enabled = !state.loading) { Text("Search") }
+            }
+        }
+        if (state.loading) item { Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
+        state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
+        if (!state.loading && state.profileId == profile.id && state.items.isEmpty() && state.error == null) {
+            item { Text("Search for a game or mod to install.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        if (state.profileId == profile.id) items(state.items, key = { it.key }) { item ->
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text(item.title, style = MaterialTheme.typography.titleMedium); Text("${item.author}/${item.name}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Surface(shape = CircleShape, color = if (item.compatible) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer) {
+                            Text(if (item.compatible) "Compatible" else "Check", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (item.shortDescription.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(item.shortDescription, maxLines = 3, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    Spacer(Modifier.height(12.dp))
+                    Button(onClick = { if (item.compatible) onInstall(profile.id, item) { result -> message = result.fold({ it }, { it.message ?: "Install failed" }) } else pendingInstall = item },
+                        enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED), modifier = Modifier.fillMaxWidth()) { Text("Install") }
+                }
+            }
+        }
+        item { HorizontalDivider(Modifier.padding(vertical = 8.dp)) }
+        item { Text("Import your own ZIP", style = MaterialTheme.typography.titleLarge) }
+        item { Text("Archives are checked for traversal, links, expansion size, compression ratio and Luanti structure.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         items(ImportKind.entries) { kind ->
-            Button(
+            FilledTonalButton(
                 onClick = {
                     requestedKind = kind
                     launcher.launch(arrayOf("application/zip", "application/octet-stream"))
@@ -460,7 +513,19 @@ private fun ContentPanel(
             ) { Text("Import ${kind.name.lowercase()} ZIP") }
         }
         message?.let { item { Text(it) } }
-        item { Text("ContentDB browsing and dependency review use the complete catalog, including flagged packages.") }
+        item { Spacer(Modifier.height(20.dp)) }
+    }
+    pendingInstall?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingInstall = null },
+            title = { Text("Compatibility warning") },
+            text = { Text("${item.title} does not declare support for Luanti ${profile.engineVersion} or this game. It may fail to load. Install it anyway?") },
+            dismissButton = { TextButton(onClick = { pendingInstall = null }) { Text("Cancel") } },
+            confirmButton = { TextButton(onClick = {
+                pendingInstall = null
+                onInstall(profile.id, item) { result -> message = result.fold({ it }, { it.message ?: "Install failed" }) }
+            }) { Text("Install anyway") } },
+        )
     }
 }
 
