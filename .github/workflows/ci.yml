@@ -40,7 +40,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: python3 engine/scripts/validate-catalog.py
-      - run: bash -n engine/scripts/build-version.sh engine/scripts/build-all.sh engine/scripts/sync-android-artifacts.sh
+      - run: bash -n engine/scripts/build-version.sh engine/scripts/build-all.sh engine/scripts/sync-android-artifacts.sh tunnel/scripts/build-frpc-android.sh
 
   deployment-config:
     runs-on: ubuntu-latest

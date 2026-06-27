@@ -22,6 +22,7 @@ control-plane/coverage.out
 engine/.cache/
 engine/build/
 engine/sources/
+tunnel/.cache/
 **/__pycache__/
 *.pyc
 
