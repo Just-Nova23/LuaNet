@@ -1,6 +1,9 @@
 package net.novax.luanet.data.content
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -21,8 +24,37 @@ data class ContentPackage(
     @SerialName("short_description") val shortDescription: String = "",
     val thumbnail: String? = null,
     val compatible: Boolean = true,
+    val badges: List<String> = emptyList(),
 ) {
     val key: String get() = "$author/$name"
+}
+
+@Serializable
+private data class ContentPackageDetail(
+    val state: String? = null,
+    @SerialName("dev_state") val devState: String? = null,
+    @SerialName("content_warnings") val contentWarnings: List<String> = emptyList(),
+    val license: String? = null,
+    @SerialName("media_license") val mediaLicense: String? = null,
+) {
+    fun badges(): List<String> = buildList {
+        if (contentWarnings.isNotEmpty()) add("Mature")
+        when (devState) {
+            "WIP" -> add("WIP")
+            "DEPRECATED" -> add("Deprecated")
+        }
+        if (state != null && state != "APPROVED") add(state.lowercase().replaceFirstChar(Char::uppercase))
+        if (listOfNotNull(license, mediaLicense).any(::looksNonFree)) add("Non-free")
+    }.distinct()
+
+    private fun looksNonFree(value: String): Boolean {
+        val normalized = value.lowercase()
+        return "nonfree" in normalized ||
+            "non-free" in normalized ||
+            "proprietary" in normalized ||
+            "cc-by-nc" in normalized ||
+            "cc-by-nd" in normalized
+    }
 }
 
 data class ContentDependency(val name: String, val candidates: List<String>)
@@ -36,7 +68,8 @@ class ContentDbClient(
         val apiType = apiType(type)
         val all = packageQuery(apiType, query, null, game)
         val supported = packageQuery(apiType, query, engineVersion, game).mapTo(hashSetOf()) { it.key }
-        return all.map { it.copy(compatible = it.key in supported) }
+        val visible = all.map { it.copy(compatible = it.key in supported) }
+        return enrichBadges(visible.take(MAX_BADGED_RESULTS)) + visible.drop(MAX_BADGED_RESULTS)
     }
 
     suspend fun hardDependencies(packageKey: String): List<ContentDependency> {
@@ -58,6 +91,12 @@ class ContentDbClient(
     }
 
     suspend fun packageByKey(packageKey: String): ContentPackage {
+        require(packageKey.count { it == '/' } == 1) { "Invalid ContentDB package key" }
+        val url = baseUrl.newBuilder().addPathSegments("api/packages/$packageKey/").build()
+        return json.decodeFromString(get(url))
+    }
+
+    private suspend fun detail(packageKey: String): ContentPackageDetail {
         require(packageKey.count { it == '/' } == 1) { "Invalid ContentDB package key" }
         val url = baseUrl.newBuilder().addPathSegments("api/packages/$packageKey/").build()
         return json.decodeFromString(get(url))
@@ -111,6 +150,14 @@ class ContentDbClient(
         else -> error("Unsupported ContentDB package type $type")
     }
 
+    private suspend fun enrichBadges(items: List<ContentPackage>): List<ContentPackage> = coroutineScope {
+        items.map { item ->
+            async {
+                runCatching { item.copy(badges = detail(item.key).badges()) }.getOrDefault(item)
+            }
+        }.awaitAll()
+    }
+
     private suspend fun get(url: HttpUrl): String = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(url).header("User-Agent", "LuaNet/0.1 (+https://github.com/Just-Nova23/LuaNet)").build()
         http.newCall(request).execute().use { response ->
@@ -119,5 +166,8 @@ class ContentDbClient(
         }
     }
 
-    companion object { private const val MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024 }
+    companion object {
+        private const val MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024
+        private const val MAX_BADGED_RESULTS = 40
+    }
 }

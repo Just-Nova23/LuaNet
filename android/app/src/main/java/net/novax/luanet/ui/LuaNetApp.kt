@@ -541,8 +541,15 @@ private fun ContentPanel(
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) { Text(item.title, style = MaterialTheme.typography.titleMedium); Text("${item.author}/${item.name}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        Surface(shape = CircleShape, color = if (item.compatible) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer) {
-                            Text(if (item.compatible) "Compatible" else "Check", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Surface(shape = CircleShape, color = if (item.compatible) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer) {
+                                Text(if (item.compatible) "Compatible" else "Check", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+                            }
+                            item.badges.take(3).forEach { badge ->
+                                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.tertiaryContainer) {
+                                    Text(badge, Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
                         }
                     }
                     if (item.shortDescription.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(item.shortDescription, maxLines = 3, color = MaterialTheme.colorScheme.onSurfaceVariant) }
