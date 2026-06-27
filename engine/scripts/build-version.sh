@@ -104,6 +104,45 @@ if [[ ! -f "$IRRLICHT_STUB_LIB" ]]; then
   "$TOOLCHAIN_BIN/llvm-ar" rcs "$IRRLICHT_STUB_LIB" "$IRRLICHT_STUB_DIR/irrlicht_stub.o"
 fi
 
+ZSTD_ARGS=()
+if grep -q 'find_package(Zstd' "$SOURCE/src/CMakeLists.txt"; then
+  TOOLCHAIN_BIN="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print -quit)/bin"
+  ZSTD_REPOSITORY="https://github.com/facebook/zstd.git"
+  ZSTD_TAG="v1.5.7"
+  ZSTD_COMMIT="f8745da6ff1ad1e7bab384bd1f9d742439278e99"
+  ZSTD_CACHE="$ROOT/.cache/zstd.git"
+  ZSTD_ROOT="$ROOT/build/android-deps/zstd-$ZSTD_COMMIT-arm64"
+  ZSTD_LIBRARY="$ZSTD_ROOT/lib/libzstd.a"
+  if [[ ! -f "$ZSTD_LIBRARY" ]]; then
+    if [[ ! -d "$ZSTD_CACHE" ]]; then
+      git init --bare "$ZSTD_CACHE"
+      git -C "$ZSTD_CACHE" remote add origin "$ZSTD_REPOSITORY"
+    fi
+    git -C "$ZSTD_CACHE" remote set-url origin "$ZSTD_REPOSITORY"
+    git -C "$ZSTD_CACHE" fetch --force --depth 1 origin "refs/tags/$ZSTD_TAG:refs/tags/$ZSTD_TAG"
+    ZSTD_ACTUAL="$(git -C "$ZSTD_CACHE" rev-parse "refs/tags/$ZSTD_TAG^{}")"
+    if [[ "$ZSTD_ACTUAL" != "$ZSTD_COMMIT" ]]; then
+      echo "Zstd verification failed: expected $ZSTD_COMMIT, got $ZSTD_ACTUAL" >&2
+      exit 68
+    fi
+    ZSTD_SOURCE="$(mktemp -d "$WORK_ROOT/zstd.XXXXXX")"
+    git clone --quiet --no-checkout "$ZSTD_CACHE" "$ZSTD_SOURCE"
+    git -C "$ZSTD_SOURCE" checkout -q --detach "$ZSTD_COMMIT"
+    make -s -C "$ZSTD_SOURCE/lib" -j"$(nproc)" libzstd.a \
+      CC="$TOOLCHAIN_BIN/aarch64-linux-android29-clang" \
+      AR="$TOOLCHAIN_BIN/llvm-ar" \
+      RANLIB="$TOOLCHAIN_BIN/llvm-ranlib" \
+      CFLAGS="-fPIC -O2"
+    mkdir -p "$ZSTD_ROOT/include" "$ZSTD_ROOT/lib"
+    install -m 0644 "$ZSTD_SOURCE/lib/libzstd.a" "$ZSTD_LIBRARY"
+    install -m 0644 "$ZSTD_SOURCE/lib/zstd.h" "$ZSTD_ROOT/include/"
+    install -m 0644 "$ZSTD_SOURCE/lib/zdict.h" "$ZSTD_ROOT/include/"
+    install -m 0644 "$ZSTD_SOURCE/lib/zstd_errors.h" "$ZSTD_ROOT/include/"
+    rm -rf "$ZSTD_SOURCE"
+  fi
+  ZSTD_ARGS=(-DZSTD_INCLUDE_DIR="$ZSTD_ROOT/include" -DZSTD_LIBRARY="$ZSTD_LIBRARY")
+fi
+
 cmake -S "$SOURCE" -B "$BUILD" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_shared \
@@ -114,7 +153,8 @@ cmake -S "$SOURCE" -B "$BUILD" -G Ninja \
   -DBUILD_CLIENT=OFF -DBUILD_SERVER=ON -DBUILD_UNITTESTS=OFF -DBUILD_BENCHMARKS=OFF \
   -DENABLE_CURSES=OFF -DENABLE_CURL=ON -DENABLE_FREETYPE=OFF -DENABLE_GETTEXT=OFF -DENABLE_SOUND=OFF \
   -DENABLE_POSTGRESQL=OFF -DENABLE_LEVELDB=OFF -DENABLE_REDIS=OFF \
-  -DENABLE_PROMETHEUS=OFF -DENABLE_SPATIAL=OFF -DENABLE_UPDATE_CHECKER=OFF
+  -DENABLE_PROMETHEUS=OFF -DENABLE_SPATIAL=OFF -DENABLE_UPDATE_CHECKER=OFF \
+  "${ZSTD_ARGS[@]}"
 cmake --build "$BUILD"
 
 ARTIFACT="$(find "$BUILD" -name "lib${LIBRARY}.so" -print -quit)"
