@@ -4,6 +4,8 @@ LuaNet runs the public tunnel with NovaX FRPS 0.69. Android packages the FRP cli
 `libfrpc.so` so it is extracted into `applicationInfo.nativeLibraryDir` and can be launched
 with `ProcessBuilder`.
 
+Requirements: Go 1.25+, Git.
+
 ```bash
 tunnel/scripts/build-frpc-android.sh
 FRPC_ARTIFACT=tunnel/build/android-arm64/libfrpc.so engine/scripts/sync-android-artifacts.sh
