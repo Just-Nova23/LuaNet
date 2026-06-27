@@ -32,7 +32,10 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
         override fun handleMessage(message: Message) {
             callback = message.replyTo ?: callback
             when (message.what) {
-                EngineProtocol.START -> start(message.data.getString(EngineProtocol.KEY_CONFIG).orEmpty())
+                EngineProtocol.START -> {
+                    profileId = message.data.getString(EngineProtocol.KEY_PROFILE_ID)
+                    start(message.data.getString(EngineProtocol.KEY_CONFIG).orEmpty())
+                }
                 EngineProtocol.STOP -> bridge?.requestStop()
                 EngineProtocol.COMMAND -> bridge?.submitCommand(message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
                 else -> super.handleMessage(message)
@@ -42,11 +45,17 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
 
     private fun start(configurationJson: String) {
         if (!running.compareAndSet(false, true)) return
+        val configuration = runCatching { Json.decodeFromString<EngineConfiguration>(configurationJson) }.getOrElse { error ->
+            onLog(3, error.message ?: error.javaClass.simpleName)
+            sendState("CRASHED")
+            running.set(false)
+            stopSelf()
+            return
+        }
+        profileId = configuration.profileId
         sendState("STARTING")
         executor.execute {
             try {
-                val configuration = Json.decodeFromString<EngineConfiguration>(configurationJson)
-                profileId = configuration.profileId
                 val native = NativeEngineBridge(this).also { bridge = it }
                 native.load(configuration.libraryName)
                 val exitCode = native.run(Json.encodeToString(configuration))
@@ -66,8 +75,8 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
     private fun send(what: Int, values: android.os.Bundle.() -> Unit) {
         callback?.let {
             EngineProtocol.send(it, what) {
-            putString(OrchestratorService.EXTRA_PROFILE_ID, profileId)
-            values()
+                putString(EngineProtocol.KEY_PROFILE_ID, profileId)
+                values()
             }
         }
     }

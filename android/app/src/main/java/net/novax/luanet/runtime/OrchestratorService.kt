@@ -54,8 +54,10 @@ class OrchestratorService : Service() {
         when (intent?.action) {
             ACTION_START -> if (profileId != null) scope.launch { startProfile(profileId) }
             ACTION_STOP -> if (profileId != null) stopProfile(profileId)
+            ACTION_COMMAND -> if (profileId != null) sendCommand(profileId, intent.getStringExtra(EXTRA_COMMAND).orEmpty())
             ACTION_STOP_ALL -> sessions.keys.toList().forEach(::stopProfile)
         }
+        if (intent?.action == ACTION_COMMAND && sessions.isEmpty()) stopSelf()
         return START_NOT_STICKY
     }
 
@@ -104,7 +106,7 @@ class OrchestratorService : Service() {
                 sessions[profileId] = BoundEngine(slot, messenger, this, System.currentTimeMillis(), System.currentTimeMillis())
                 EngineProtocol.send(messenger, EngineProtocol.START, callback) {
                     putString(EngineProtocol.KEY_CONFIG, Json.encodeToString(configuration))
-                    putString(EXTRA_PROFILE_ID, profileId)
+                    putString(EngineProtocol.KEY_PROFILE_ID, profileId)
                 }
                 updateNotification()
             }
@@ -121,6 +123,19 @@ class OrchestratorService : Service() {
         scope.launch { repository.updateRuntime(profileId, ServerState.STOPPING, 30_000 + engine.slot) }
     }
 
+    private fun sendCommand(profileId: String, raw: String) {
+        val command = raw.trim().removePrefix("/").trim()
+        if (command.isBlank()) return
+        val engine = sessions[profileId] ?: return
+        RuntimeRegistry.update(profileId) { previous ->
+            previous?.copy(logs = (previous.logs + "> /$command").takeLast(2_000))
+        }
+        EngineProtocol.send(engine.messenger, EngineProtocol.COMMAND, callback) {
+            putString(EngineProtocol.KEY_PROFILE_ID, profileId)
+            putString(EngineProtocol.KEY_TEXT, command)
+        }
+    }
+
     private fun engineEnded(profileId: String, state: String) {
         val engine = sessions.remove(profileId)
         if (engine != null) runCatching { unbindService(engine.connection) }
@@ -133,7 +148,8 @@ class OrchestratorService : Service() {
 
     private inner class CallbackHandler : Handler(Looper.getMainLooper()) {
         override fun handleMessage(message: Message) {
-            val profileId = sessions.entries.firstOrNull { it.value.messenger == message.replyTo }?.key
+            val profileId = message.data.getString(EngineProtocol.KEY_PROFILE_ID)
+                ?: sessions.entries.firstOrNull { it.value.messenger == message.replyTo }?.key
                 ?: message.data.getString(EXTRA_PROFILE_ID)
                 ?: sessions.keys.singleOrNull()
                 ?: return
@@ -234,13 +250,21 @@ class OrchestratorService : Service() {
         const val EXTRA_PROFILE_ID = "profile_id"
         const val ACTION_START = "net.novax.luanet.START"
         const val ACTION_STOP = "net.novax.luanet.STOP"
+        const val ACTION_COMMAND = "net.novax.luanet.COMMAND"
         const val ACTION_STOP_ALL = "net.novax.luanet.STOP_ALL"
+        const val EXTRA_COMMAND = "command"
 
         fun start(context: Context, profileId: String) = ContextCompat.startForegroundService(
             context, Intent(context, OrchestratorService::class.java).setAction(ACTION_START).putExtra(EXTRA_PROFILE_ID, profileId)
         )
         fun stop(context: Context, profileId: String) = ContextCompat.startForegroundService(
             context, Intent(context, OrchestratorService::class.java).setAction(ACTION_STOP).putExtra(EXTRA_PROFILE_ID, profileId)
+        )
+        fun command(context: Context, profileId: String, command: String) = ContextCompat.startForegroundService(
+            context, Intent(context, OrchestratorService::class.java)
+                .setAction(ACTION_COMMAND)
+                .putExtra(EXTRA_PROFILE_ID, profileId)
+                .putExtra(EXTRA_COMMAND, command)
         )
     }
 }

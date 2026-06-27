@@ -357,6 +357,7 @@ private fun Dashboard(
     val context = LocalContext.current
     val sessions by RuntimeRegistry.sessions.collectAsStateWithLifecycle()
     val runtime = sessions[profile.id]
+    val running = runtime?.state in setOf("STARTING", "RUNNING") || profile.state in setOf(ServerState.STARTING, ServerState.RUNNING)
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf(
         DashboardTab("Overview", Icons.Default.Dashboard), DashboardTab("Console", Icons.AutoMirrored.Filled.Terminal),
@@ -388,8 +389,12 @@ private fun Dashboard(
             HorizontalDivider()
             when (selectedTab) {
                 0 -> Overview(profile, runtime?.state, runtime?.localPort ?: profile.localPort, context)
-                1 -> ConsolePanel(runtime?.logs.orEmpty())
-                2 -> PlayersPanel(runtime?.players?.toList().orEmpty())
+                1 -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
+                    OrchestratorService.command(context, profile.id, command)
+                }
+                2 -> PlayersPanel(runtime?.players?.toList().orEmpty(), running) { command ->
+                    OrchestratorService.command(context, profile.id, command)
+                }
                 3 -> ContentPanel(profile, contentState, onSearchContent, onInstallContent, onImportArchive)
                 4 -> AutoOffSettings(profile, onUpdateAutoOff)
                 5 -> BackupPanel(profile, onCreateBackup)
@@ -401,35 +406,83 @@ private fun Dashboard(
 private data class DashboardTab(val label: String, val icon: ImageVector)
 
 @Composable
-private fun ConsolePanel(logs: List<String>) {
-    if (logs.isEmpty()) {
-        EmptySection(Icons.AutoMirrored.Filled.Terminal, "Console is quiet", "Start the server to see engine logs and run commands.")
-    } else {
-        LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            items(logs) { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+private fun ConsolePanel(
+    profileId: String,
+    logs: List<String>,
+    running: Boolean,
+    onCommand: (String) -> Unit,
+) {
+    var command by remember(profileId) { mutableStateOf("") }
+    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        if (logs.isEmpty()) {
+            Column(Modifier.weight(1f).fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
+                    Icon(Icons.AutoMirrored.Filled.Terminal, null, Modifier.padding(18.dp).size(30.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("Console is quiet", style = MaterialTheme.typography.titleLarge)
+                Spacer(Modifier.height(6.dp))
+                Text("Start the server to see engine logs and run commands.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(logs) { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = command,
+                onValueChange = { command = it.take(240) },
+                label = { Text("Server command") },
+                placeholder = { Text("status, kick player, grant player all") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                enabled = running,
+            )
+            Button(
+                enabled = running && command.isNotBlank(),
+                onClick = {
+                    onCommand(command)
+                    command = ""
+                },
+            ) { Text("Send") }
         }
     }
 }
 
 @Composable
-private fun PlayersPanel(players: List<String>) {
+private fun PlayersPanel(
+    players: List<String>,
+    running: Boolean,
+    onCommand: (String) -> Unit,
+) {
     if (players.isEmpty()) {
         EmptySection(Icons.Default.Group, "No players online", "Connected players will appear here with moderation actions.")
     } else {
         LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(players) { player ->
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-                            Text(player.take(1).uppercase(), Modifier.padding(horizontal = 13.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                                Text(player.take(1).uppercase(), Modifier.padding(horizontal = 13.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(player, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                         }
-                        Spacer(Modifier.width(12.dp)); Text(player, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(enabled = running, onClick = { onCommand("kick ${player.safePlayerName()}") }) { Text("Kick") }
+                            FilledTonalButton(enabled = running, onClick = { onCommand("ban ${player.safePlayerName()}") }) { Text("Ban") }
+                            TextButton(enabled = running, onClick = { onCommand("grant ${player.safePlayerName()} all") }) { Text("Make admin") }
+                        }
                     }
                 }
             }
         }
     }
 }
+
+private fun String.safePlayerName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)
 
 @Composable
 private fun EmptySection(icon: ImageVector, title: String, detail: String) {

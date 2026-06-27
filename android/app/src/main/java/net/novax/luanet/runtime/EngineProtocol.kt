@@ -17,6 +17,7 @@ object EngineProtocol {
     const val KEY_CONFIG = "config"
     const val KEY_TEXT = "text"
     const val KEY_STATE = "state"
+    const val KEY_PROFILE_ID = "profile_id"
 
     fun send(target: Messenger, what: Int, replyTo: Messenger? = null, values: Bundle.() -> Unit = {}) {
         target.send(Message.obtain(null, what).apply {
@@ -38,4 +39,3 @@ data class EngineConfiguration(
     val gameId: String?,
     val consoleAdmin: String,
 )
-
