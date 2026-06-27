@@ -28,6 +28,9 @@ def main() -> None:
     injection = f"""
 \ttarget_sources(${{PROJECT_NAME}}server PRIVATE \"{args.bridge.as_posix()}\")
 \ttarget_include_directories(${{PROJECT_NAME}}server PRIVATE \"{(args.bridge.parent.parent / 'include').as_posix()}\")
+\tif(ANDROID)
+\t\ttarget_link_libraries(${{PROJECT_NAME}}server log)
+\tendif()
 \tset_target_properties(${{PROJECT_NAME}}server PROPERTIES OUTPUT_NAME \"{args.library}\")
 """
     if marker not in text:

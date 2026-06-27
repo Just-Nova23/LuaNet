@@ -23,6 +23,7 @@ extern int main(int argc, char *argv[]);
 
 namespace porting {
 void osSpecificInit() {}
+void initAndroid() {}
 void cleanupAndroid() {}
 
 std::string getLanguageAndroid()
@@ -44,9 +45,18 @@ bool setSystemPaths()
 	return true;
 }
 
+void initializePathsAndroid()
+{
+	setSystemPaths();
+}
+
+void copyAssets() {}
 void openURIAndroid(const char *) {}
 void shareFileAndroid(const std::string &) {}
 void setPlayingNowNotification(bool) {}
+void showInputDialog(const std::string &, const std::string &, const std::string &, int) {}
+int getInputDialogState() { return 0; }
+std::string getInputDialogValue() { return {}; }
 void showTextInputDialog(const std::string &, const std::string &, int) {}
 void showComboBoxDialog(const std::string *, s32, s32) {}
 std::string getInputDialogMessage() { return {}; }
