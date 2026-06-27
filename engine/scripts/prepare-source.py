@@ -36,6 +36,14 @@ def main() -> None:
         "\tlist(APPEND common_SRCS porting_android.cpp)",
         "\t# LuaNet headless Android server provides porting_android replacements in the JNI bridge.",
     )
+    text = text.replace(
+        "\tset(PLATFORM_LIBS -lpthread ${CMAKE_DL_LIBS})",
+        "\tif(ANDROID)\n"
+        "\t\tset(PLATFORM_LIBS ${CMAKE_DL_LIBS})\n"
+        "\telse()\n"
+        "\t\tset(PLATFORM_LIBS -lpthread ${CMAKE_DL_LIBS})\n"
+        "\tendif()",
+    )
     text = re.sub(
         r"\n\t\tCreateLegacyAlias\(minetestserver_alias[^\n]*\)",
         "\n\t\t# LuaNet builds the server as an Android shared library, not a legacy executable alias.",
