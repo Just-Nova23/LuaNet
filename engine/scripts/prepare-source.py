@@ -65,6 +65,57 @@ def main() -> None:
         )
         android_header.write_text(header)
 
+    vector2d_header = args.source / "src" / "irr_v2d.h"
+    if vector2d_header.exists():
+        vector2d = vector2d_header.read_text()
+        if "LuaNet vector2d hash" not in vector2d:
+            vector2d = vector2d.replace(
+                "#include <vector2d.h>\n",
+                "#include <vector2d.h>\n\n#include <functional>\n",
+                1,
+            )
+            vector2d += """
+
+// LuaNet vector2d hash: libc++ does not provide std::hash for Irrlicht vectors.
+namespace std {
+template <>
+struct hash<irr::core::vector2d<irr::s16>> {
+	size_t operator()(const irr::core::vector2d<irr::s16> &value) const noexcept
+	{
+		return static_cast<size_t>(value.X) ^
+				(static_cast<size_t>(value.Y) << 16);
+	}
+};
+}
+"""
+            vector2d_header.write_text(vector2d)
+
+    vector3d_header = args.source / "src" / "irr_v3d.h"
+    if vector3d_header.exists():
+        vector3d = vector3d_header.read_text()
+        if "LuaNet vector3d hash" not in vector3d:
+            vector3d = vector3d.replace(
+                "#include <vector3d.h>\n",
+                "#include <vector3d.h>\n\n#include <functional>\n",
+                1,
+            )
+            vector3d += """
+
+// LuaNet vector3d hash: libc++ does not provide std::hash for Irrlicht vectors.
+namespace std {
+template <>
+struct hash<irr::core::vector3d<irr::s16>> {
+	size_t operator()(const irr::core::vector3d<irr::s16> &value) const noexcept
+	{
+		return static_cast<size_t>(value.X) ^
+				(static_cast<size_t>(value.Y) << 16) ^
+				(static_cast<size_t>(value.Z) << 32);
+	}
+};
+}
+"""
+            vector3d_header.write_text(vector3d)
+
     porting_cpp = args.source / "src" / "porting.cpp"
     if porting_cpp.exists():
         porting = porting_cpp.read_text()
