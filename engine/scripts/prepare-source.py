@@ -79,6 +79,18 @@ def main() -> None:
             )
             porting_cpp.write_text(porting)
 
+    server_header = args.source / "src" / "server.h"
+    if server_header.exists():
+        server = server_header.read_text()
+        server = server.replace(
+            "return std::hash<v3s16>()(p.first) ^ p.second;",
+            "return static_cast<size_t>(p.first.X) ^\n"
+            "\t\t\t\t\t(static_cast<size_t>(p.first.Y) << 16) ^\n"
+            "\t\t\t\t\t(static_cast<size_t>(p.first.Z) << 32) ^\n"
+            "\t\t\t\t\tstatic_cast<size_t>(p.second);",
+        )
+        server_header.write_text(server)
+
 
 if __name__ == "__main__":
     main()
