@@ -58,6 +58,7 @@ private data class ContentPackageDetail(
 }
 
 data class ContentDependency(val name: String, val candidates: List<String>)
+data class DownloadProgress(val bytesRead: Long, val totalBytes: Long?)
 
 class ContentDbClient(
     private val http: OkHttpClient = OkHttpClient(),
@@ -108,12 +109,18 @@ class ContentDbClient(
         return builder.addPathSegment("download").build()
     }
 
-    suspend fun download(item: ContentPackage, destination: java.io.File) = withContext(Dispatchers.IO) {
+    suspend fun download(
+        item: ContentPackage,
+        destination: java.io.File,
+        onProgress: (DownloadProgress) -> Unit = {},
+    ) = withContext(Dispatchers.IO) {
         val request = Request.Builder().url(downloadUrl(item)).header("User-Agent", "LuaNet/0.1 (+https://github.com/Just-Nova23/LuaNet)").build()
         http.newCall(request).execute().use { response ->
             if (!response.isSuccessful) error("ContentDB download failed: HTTP ${response.code}")
             val body = response.body ?: error("ContentDB returned an empty archive")
-            if (body.contentLength() > MAX_DOWNLOAD_BYTES) error("ContentDB archive exceeds 512 MB")
+            val contentLength = body.contentLength().takeIf { it >= 0 }
+            if (contentLength != null && contentLength > MAX_DOWNLOAD_BYTES) error("ContentDB archive exceeds 512 MB")
+            onProgress(DownloadProgress(bytesRead = 0, totalBytes = contentLength))
             destination.outputStream().use { output ->
                 body.byteStream().use { input ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -124,6 +131,7 @@ class ContentDbClient(
                         total += read
                         if (total > MAX_DOWNLOAD_BYTES) error("ContentDB archive exceeds 512 MB")
                         output.write(buffer, 0, read)
+                        onProgress(DownloadProgress(bytesRead = total, totalBytes = contentLength))
                     }
                 }
             }

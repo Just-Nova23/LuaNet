@@ -58,6 +58,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -102,6 +103,7 @@ private sealed interface Destination {
     data object Servers : Destination
     data object Create : Destination
     data class Dashboard(val id: String) : Destination
+    data class ContentLibrary(val id: String) : Destination
 }
 
 @Composable
@@ -130,17 +132,26 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 profile = profiles.firstOrNull { it.id == current.id },
                 installedPackages = installedPackages,
                 onBack = { destination = Destination.Servers },
+                onOpenContentLibrary = { destination = Destination.ContentLibrary(current.id) },
                 onUpdateAutoOff = viewModel::updateAutoOff,
-                onImportArchive = viewModel::importArchive,
                 onCreateBackup = viewModel::createBackup,
-                contentState = content,
-                onSearchContent = viewModel::searchContent,
-                onInstallContent = viewModel::installContent,
                 accountState = account,
                 onSaveAccountToken = viewModel::saveAccountToken,
                 onSyncEntitlement = viewModel::syncEntitlement,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
                 onStopPublicTunnel = viewModel::stopPublicTunnel,
+            )
+        }
+        is Destination.ContentLibrary -> {
+            val installedPackages by viewModel.installedPackages(current.id).collectAsStateWithLifecycle(emptyList())
+            ContentBrowserScreen(
+                profile = profiles.firstOrNull { it.id == current.id },
+                installedPackages = installedPackages,
+                state = content,
+                onBack = { destination = Destination.Dashboard(current.id) },
+                onSearch = viewModel::searchContent,
+                onInstall = viewModel::installContent,
+                onImport = viewModel::importArchive,
             )
         }
     }
@@ -359,12 +370,9 @@ private fun Dashboard(
     profile: ServerProfileEntity?,
     installedPackages: List<InstalledPackageEntity>,
     onBack: () -> Unit,
+    onOpenContentLibrary: () -> Unit,
     onUpdateAutoOff: (String, Boolean, Int) -> Unit,
-    onImportArchive: (String, Uri, ImportKind, (Result<String>) -> Unit) -> Unit,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
-    contentState: ContentBrowserState,
-    onSearchContent: (String, String, String) -> Unit,
-    onInstallContent: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
     accountState: AccountState,
     onSaveAccountToken: (String) -> Unit,
     onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
@@ -420,7 +428,7 @@ private fun Dashboard(
                 2 -> PlayersPanel(runtime?.players?.toList().orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
                 }
-                3 -> ContentPanel(profile, installedPackages, contentState, onSearchContent, onInstallContent, onImportArchive)
+                3 -> ContentSummaryPanel(profile, installedPackages, onOpenContentLibrary)
                 4 -> SettingsPanel(profile, accountState, onUpdateAutoOff, onSaveAccountToken, onSyncEntitlement)
                 5 -> BackupPanel(profile, onCreateBackup)
             }
@@ -519,6 +527,87 @@ private fun EmptySection(icon: ImageVector, title: String, detail: String) {
 }
 
 @Composable
+private fun ContentSummaryPanel(
+    profile: ServerProfileEntity,
+    installedPackages: List<InstalledPackageEntity>,
+    onOpenContentLibrary: () -> Unit,
+) {
+    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item {
+            Text("Content", style = MaterialTheme.typography.headlineMedium)
+            Text(
+                "Install a game first, then add mods and modpacks. The full ContentDB browser opens as its own screen.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        item { InstalledContentSummary(installedPackages) }
+        if (profile.gameKey == null) {
+            item {
+                Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.FolderZip, null, tint = MaterialTheme.colorScheme.tertiary)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("A game is required before the server can start", fontWeight = FontWeight.SemiBold)
+                            Text("Open ContentDB, search games, or import a game ZIP.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Button(
+                onClick = onOpenContentLibrary,
+                enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) {
+                Icon(Icons.Default.FolderZip, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Open ContentDB browser")
+            }
+        }
+        item {
+            Text(
+                "Stop the server before changing games, mods, modpacks, or manual ZIP imports.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ContentBrowserScreen(
+    profile: ServerProfileEntity?,
+    installedPackages: List<InstalledPackageEntity>,
+    state: ContentBrowserState,
+    onBack: () -> Unit,
+    onSearch: (String, String, String) -> Unit,
+    onInstall: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
+    onImport: (String, Uri, ImportKind, (Result<String>) -> Unit) -> Unit,
+) {
+    if (profile == null) return
+    Scaffold(topBar = {
+        TopAppBar(
+            title = {
+                Column {
+                    Text("ContentDB")
+                    Text(profile.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            },
+            navigationIcon = {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+            },
+        )
+    }) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            ContentPanel(profile, installedPackages, state, onSearch, onInstall, onImport)
+        }
+    }
+}
+
+@Composable
 private fun ContentPanel(
     profile: ServerProfileEntity,
     installedPackages: List<InstalledPackageEntity>,
@@ -532,6 +621,9 @@ private fun ContentPanel(
     var requestedKind by remember { mutableStateOf(ImportKind.GAME) }
     var message by remember { mutableStateOf<String?>(null) }
     var pendingInstall by remember { mutableStateOf<ContentPackage?>(null) }
+    val installedKeys = remember(installedPackages) { installedPackages.mapTo(hashSetOf()) { it.packageKey } }
+    val operation = state.operation?.takeIf { it.profileId == profile.id }
+    val operationBusy = operation != null
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) onImport(profile.id, uri, requestedKind) { result ->
             message = result.fold({ it }, { it.message ?: "Import failed" })
@@ -541,8 +633,8 @@ private fun ContentPanel(
         Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        item { Text("ContentDB", style = MaterialTheme.typography.headlineMedium) }
-        item { Text("Browse the complete catalog. Compatibility is shown as a warning, never hidden.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { Text("Explore packages", style = MaterialTheme.typography.headlineMedium) }
+        item { Text("Browse ContentDB by package name. Compatibility is shown as a warning, never hidden.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item { InstalledContentSummary(installedPackages) }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -555,20 +647,32 @@ private fun ContentPanel(
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(query, { query = it.take(80) }, label = { Text("Search ContentDB") }, singleLine = true, modifier = Modifier.weight(1f))
-                FilledTonalButton(onClick = { onSearch(profile.id, type, query) }, enabled = !state.loading) { Text("Search") }
+                FilledTonalButton(onClick = { onSearch(profile.id, type, query) }, enabled = !state.loading && !operationBusy) { Text("Search") }
             }
         }
+        operation?.let { item { ContentOperationCard(it) } }
         if (state.loading) item { Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
         state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
         if (!state.loading && state.profileId == profile.id && state.items.isEmpty() && state.error == null) {
-            item { Text("Search for a game or mod to install.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            item { Text("Search with an empty box to browse popular packages, or type a mod/game name.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         if (state.profileId == profile.id) items(state.items, key = { it.key }) { item ->
+            val installed = item.key in installedKeys
+            val packageBusy = operation?.packageKey == item.key
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) { Text(item.title, style = MaterialTheme.typography.titleMedium); Text("${item.author}/${item.name}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Column(Modifier.weight(1f)) {
+                            Text(item.name, style = MaterialTheme.typography.headlineSmall)
+                            Text(item.title, style = MaterialTheme.typography.titleMedium)
+                            Text("${item.author}/${item.name}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                            if (installed) {
+                                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                                    Text("Installed", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
+                                }
+                            }
                             Surface(shape = CircleShape, color = if (item.compatible) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.errorContainer) {
                                 Text(if (item.compatible) "Compatible" else "Check", Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelMedium)
                             }
@@ -582,7 +686,9 @@ private fun ContentPanel(
                     if (item.shortDescription.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(item.shortDescription, maxLines = 3, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                     Spacer(Modifier.height(12.dp))
                     Button(onClick = { if (item.compatible) onInstall(profile.id, item) { result -> message = result.fold({ it }, { it.message ?: "Install failed" }) } else pendingInstall = item },
-                        enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED), modifier = Modifier.fillMaxWidth()) { Text("Install") }
+                        enabled = !installed && !operationBusy && profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Text(if (installed) "Installed" else if (packageBusy) "Installing…" else "Install") }
                 }
             }
         }
@@ -595,7 +701,7 @@ private fun ContentPanel(
                     requestedKind = kind
                     launcher.launch(arrayOf("application/zip", "application/octet-stream"))
                 },
-                enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
+                enabled = !operationBusy && profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Import ${kind.name.lowercase()} ZIP") }
         }
@@ -614,6 +720,43 @@ private fun ContentPanel(
             }) { Text("Install anyway") } },
         )
     }
+}
+
+@Composable
+private fun ContentOperationCard(operation: ContentOperationState) {
+    val total = operation.totalBytes
+    val determinate = !operation.indeterminate && total != null && total > 0
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(operation.title, style = MaterialTheme.typography.titleMedium)
+            Text(operation.phase, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            if (determinate) {
+                val progress = (operation.bytesRead.toFloat() / total!!.toFloat()).coerceIn(0f, 1f)
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                Text(
+                    "${formatBytes(operation.bytesRead)} / ${formatBytes(total)}",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (operation.bytesRead > 0) {
+                    Text(
+                        formatBytes(operation.bytesRead),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> "%.1f GiB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024L -> "%.1f MiB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "%.1f KiB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 @Composable

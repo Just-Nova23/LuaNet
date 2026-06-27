@@ -23,6 +23,8 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.UUID
 
+data class ArchiveCopyProgress(val bytesRead: Long, val totalBytes: Long?)
+
 class ServerRepository(
     private val context: Context,
     private val dao: LuaNetDao,
@@ -73,13 +75,19 @@ class ServerRepository(
         ))
     }
 
-    suspend fun importArchive(profileId: String, source: Uri, expected: ImportKind): ImportResult =
+    suspend fun importArchive(
+        profileId: String,
+        source: Uri,
+        expected: ImportKind,
+        onProgress: (ArchiveCopyProgress) -> Unit = {},
+    ): ImportResult =
         importArchiveInternal(
             profileId = profileId,
             source = source,
             defaultKind = expected,
             allowedKinds = setOf(expected),
             metadata = null,
+            onProgress = onProgress,
         )
 
     suspend fun importContentDbArchive(
@@ -103,6 +111,7 @@ class ServerRepository(
             releaseId = releaseId,
             compatible = compatible,
         ),
+        onProgress = {},
     )
 
     private suspend fun importArchiveInternal(
@@ -111,13 +120,11 @@ class ServerRepository(
         defaultKind: ImportKind,
         allowedKinds: Set<ImportKind>,
         metadata: PackageMetadata?,
+        onProgress: (ArchiveCopyProgress) -> Unit,
     ): ImportResult = withContext(Dispatchers.IO) {
         val profile = requireNotNull(dao.profile(profileId)) { "Server profile not found" }
         require(profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)) { "Stop the server before importing content" }
-        val displayName = context.contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
-            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
-            ?: source.lastPathSegment?.substringAfterLast('/')
-            ?: "${defaultKind.name.lowercase()}.zip"
+        val sourceInfo = archiveSourceInfo(source, defaultKind)
         val archive = File(context.cacheDir, "import-${UUID.randomUUID()}.zip")
         val root = profileDirectory(profileId)
         val incoming = File(root, ".incoming-${UUID.randomUUID()}")
@@ -126,12 +133,14 @@ class ServerRepository(
                 archive.outputStream().buffered().use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var total = 0L
+                    onProgress(ArchiveCopyProgress(bytesRead = 0, totalBytes = sourceInfo.sizeBytes))
                     while (true) {
                         val read = input.read(buffer)
                         if (read < 0) break
                         total += read
                         require(total <= MAX_ARCHIVE_BYTES) { "ZIP archive exceeds 512 MB" }
                         output.write(buffer, 0, read)
+                        onProgress(ArchiveCopyProgress(bytesRead = total, totalBytes = sourceInfo.sizeBytes))
                     }
                 }
             } ?: error("Unable to read selected document")
@@ -139,7 +148,7 @@ class ServerRepository(
             if (imported.kind !in allowedKinds) {
                 throw UnsafeArchiveException("Expected ${allowedKinds.joinToString(" or ") { it.name.lowercase() }} archive, found ${imported.kind.name.lowercase()}")
             }
-            val identifier = safeIdentifier(displayName.substringBeforeLast('.'))
+            val identifier = safeIdentifier(sourceInfo.displayName.substringBeforeLast('.'))
             val destination = when (imported.kind) {
                 ImportKind.WORLD -> File(root, "world")
                 ImportKind.GAME -> File(root, "games/$identifier")
@@ -158,7 +167,7 @@ class ServerRepository(
                 dao.upsertPackage(InstalledPackageEntity(
                     id = UUID.randomUUID().toString(), profileId = profileId,
                     packageKey = metadata?.packageKey ?: "manual/$identifier",
-                    title = metadata?.title ?: displayName.substringBeforeLast('.'),
+                    title = metadata?.title ?: sourceInfo.displayName.substringBeforeLast('.'),
                     type = type,
                     source = metadata?.source ?: PackageSource.MANUAL_ZIP,
                     releaseId = metadata?.releaseId,
@@ -186,6 +195,26 @@ class ServerRepository(
     fun profileDirectory(id: String): File = File(context.getExternalFilesDir(null) ?: context.filesDir, "servers/$id")
     fun backupDirectory(): File = File(context.getExternalFilesDir(null) ?: context.filesDir, "backups")
 
+    private fun archiveSourceInfo(source: Uri, defaultKind: ImportKind): ArchiveSourceInfo {
+        var displayName: String? = null
+        var sizeBytes: Long? = null
+        context.contentResolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+            ?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                    if (nameIndex >= 0) displayName = cursor.getString(nameIndex)
+                    if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) sizeBytes = cursor.getLong(sizeIndex).takeIf { it >= 0 }
+                }
+            }
+        return ArchiveSourceInfo(
+            displayName = displayName
+                ?: source.lastPathSegment?.substringAfterLast('/')
+                ?: "${defaultKind.name.lowercase()}.zip",
+            sizeBytes = sizeBytes,
+        )
+    }
+
     private fun safeIdentifier(value: String): String = value.lowercase()
         .replace(Regex("[^a-z0-9_-]+"), "_").trim('_').take(64).ifBlank { "content-${UUID.randomUUID().toString().take(8)}" }
 
@@ -196,6 +225,8 @@ class ServerRepository(
         val releaseId: Long?,
         val compatible: Boolean,
     )
+
+    private data class ArchiveSourceInfo(val displayName: String, val sizeBytes: Long?)
 
     companion object { private const val MAX_ARCHIVE_BYTES = 512L * 1024 * 1024 }
 }

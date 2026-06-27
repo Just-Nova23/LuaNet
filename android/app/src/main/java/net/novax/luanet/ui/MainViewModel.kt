@@ -9,12 +9,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.novax.luanet.LuaNetApplication
+import net.novax.luanet.data.ArchiveCopyProgress
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.SubscriptionTier
 import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.data.content.ContentPackage
+import net.novax.luanet.data.content.DownloadProgress
 import net.novax.luanet.runtime.EntitlementStore
 import net.novax.luanet.runtime.OrchestratorService
 import java.io.File
@@ -56,10 +59,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun importArchive(profileId: String, uri: Uri, kind: ImportKind, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
-            onResult(runCatching {
-                val result = repository.importArchive(profileId, uri, kind)
-                "Imported ${result.kind.name.lowercase()} (${result.bytesWritten / 1024} KiB)"
-            })
+            setOperation(profileId, "Manual ZIP", "Reading selected ${kind.name.lowercase()} archive", indeterminate = true)
+            val result = runCatching {
+                val imported = repository.importArchive(profileId, uri, kind) { progress ->
+                    setArchiveProgress(profileId, kind, progress)
+                }
+                setOperation(profileId, "Manual ZIP", "Installing ${kind.name.lowercase()} archive", indeterminate = true)
+                "Imported ${imported.kind.name.lowercase()} (${imported.bytesWritten / 1024} KiB)"
+            }
+            _content.update { it.copy(operation = null) }
+            onResult(result)
         }
     }
 
@@ -122,27 +131,48 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun searchContent(profileId: String, type: String, query: String) {
         val profile = profiles.value.firstOrNull { it.id == profileId } ?: return
-        _content.value = ContentBrowserState(profileId, type, query, loading = true)
+        _content.value = ContentBrowserState(
+            profileId = profileId,
+            type = type,
+            query = query,
+            loading = true,
+            operation = _content.value.operation,
+        )
         viewModelScope.launch {
             _content.value = runCatching {
                 ContentBrowserState(profileId, type, query,
-                    items = container.contentDb.search(type, query, profile.engineVersion, profile.gameKey), loading = false)
-            }.getOrElse { ContentBrowserState(profileId, type, query, error = it.message ?: "ContentDB request failed") }
+                    items = container.contentDb.search(type, query, profile.engineVersion, profile.gameKey),
+                    loading = false,
+                    operation = _content.value.operation,
+                )
+            }.getOrElse {
+                ContentBrowserState(
+                    profileId = profileId,
+                    type = type,
+                    query = query,
+                    error = it.message ?: "ContentDB request failed",
+                    operation = _content.value.operation,
+                )
+            }
         }
     }
 
     fun installContent(profileId: String, item: ContentPackage, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
-            onResult(runCatching {
+            setOperation(profileId, item.title, "Preparing install", packageKey = item.key, indeterminate = true)
+            val result = runCatching {
                 val installed = linkedSetOf<String>()
                 installWithDependencies(profileId, item, installed)
                 "Installed ${item.title}${if (installed.size > 1) " with ${installed.size - 1} dependencies" else ""}"
-            })
+            }
+            _content.update { it.copy(operation = null) }
+            onResult(result)
         }
     }
 
     private suspend fun installWithDependencies(profileId: String, item: ContentPackage, visited: MutableSet<String>) {
         check(visited.add(item.key)) { "Cyclic ContentDB dependency involving ${item.key}" }
+        setOperation(profileId, item.title, "Resolving dependencies", packageKey = item.key, indeterminate = true)
         container.contentDb.hardDependencies(item.key).forEach { dependency ->
             var packageItem: ContentPackage? = null
             for (key in dependency.candidates.take(12)) {
@@ -166,7 +196,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         val archive = File(getApplication<Application>().cacheDir, "${item.name}.zip")
         try {
-            container.contentDb.download(item, archive)
+            container.contentDb.download(item, archive) { progress ->
+                setDownloadProgress(profileId, item, progress)
+            }
+            setOperation(profileId, item.title, "Installing archive", packageKey = item.key, indeterminate = true)
             repository.importContentDbArchive(
                 profileId = profileId,
                 source = Uri.fromFile(archive),
@@ -179,6 +212,51 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         } finally {
             archive.delete()
+        }
+    }
+
+    private fun setDownloadProgress(profileId: String, item: ContentPackage, progress: DownloadProgress) {
+        setOperation(
+            profileId = profileId,
+            title = item.title,
+            phase = "Downloading ${item.author}/${item.name}",
+            packageKey = item.key,
+            bytesRead = progress.bytesRead,
+            totalBytes = progress.totalBytes,
+        )
+    }
+
+    private fun setArchiveProgress(profileId: String, kind: ImportKind, progress: ArchiveCopyProgress) {
+        setOperation(
+            profileId = profileId,
+            title = "Manual ZIP",
+            phase = "Copying ${kind.name.lowercase()} archive",
+            bytesRead = progress.bytesRead,
+            totalBytes = progress.totalBytes,
+        )
+    }
+
+    private fun setOperation(
+        profileId: String,
+        title: String,
+        phase: String,
+        packageKey: String? = null,
+        bytesRead: Long = 0,
+        totalBytes: Long? = null,
+        indeterminate: Boolean = false,
+    ) {
+        _content.update { current ->
+            current.copy(
+                operation = ContentOperationState(
+                    profileId = profileId,
+                    packageKey = packageKey,
+                    title = title,
+                    phase = phase,
+                    bytesRead = bytesRead,
+                    totalBytes = totalBytes,
+                    indeterminate = indeterminate,
+                ),
+            )
         }
     }
 }
@@ -196,4 +274,15 @@ data class ContentBrowserState(
     val items: List<ContentPackage> = emptyList(),
     val loading: Boolean = false,
     val error: String? = null,
+    val operation: ContentOperationState? = null,
+)
+
+data class ContentOperationState(
+    val profileId: String,
+    val packageKey: String? = null,
+    val title: String,
+    val phase: String,
+    val bytesRead: Long = 0,
+    val totalBytes: Long? = null,
+    val indeterminate: Boolean = false,
 )

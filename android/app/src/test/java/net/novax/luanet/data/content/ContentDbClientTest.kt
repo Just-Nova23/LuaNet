@@ -6,8 +6,10 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.nio.file.Files
 
 class ContentDbClientTest {
     private lateinit var server: MockWebServer
@@ -50,6 +52,25 @@ class ContentDbClientTest {
         server.enqueue(MockResponse().setBody("""{"dev_state":"WIP","content_warnings":["gore"],"license":"MIT"}"""))
         val result = client().search("mod", "mod", "5.16.1").single()
         assertEquals(listOf("Mature", "WIP"), result.badges)
+    }
+
+    @Test fun downloadReportsProgress() = runTest {
+        server.enqueue(MockResponse().setBody("0123456789"))
+        val temp = Files.createTempFile("luanet-content", ".zip").toFile()
+        val progress = mutableListOf<DownloadProgress>()
+        try {
+            client().download(
+                ContentPackage(author = "alice", name = "mod", title = "Mod", type = "mod"),
+                temp,
+                progress::add,
+            )
+            assertEquals("0123456789", temp.readText())
+            assertTrue(progress.isNotEmpty())
+            assertEquals(10L, progress.last().bytesRead)
+            assertEquals(10L, progress.last().totalBytes)
+        } finally {
+            temp.delete()
+        }
     }
 
     private fun client() = ContentDbClient(baseUrl = server.url("/"))
