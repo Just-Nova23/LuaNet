@@ -32,6 +32,10 @@ def main() -> None:
 """
     if marker not in text:
         raise SystemExit("Unsupported Luanti BUILD_SERVER block")
+    text = text.replace(
+        "\tlist(APPEND common_SRCS porting_android.cpp)",
+        "\t# LuaNet headless Android server provides porting_android replacements in the JNI bridge.",
+    )
     cmake.write_text(text.replace(marker, injection + marker, 1))
 
 

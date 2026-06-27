@@ -5,6 +5,7 @@
 #include "luanet_engine.h"
 
 #include "porting.h"
+#include "util/numeric.h"
 
 #include <android/log.h>
 #include <atomic>
@@ -18,6 +19,38 @@
 #include <vector>
 
 extern int main(int argc, char *argv[]);
+
+namespace porting {
+void osSpecificInit() {}
+void cleanupAndroid() {}
+
+std::string getLanguageAndroid()
+{
+	const char *language = std::getenv("LANG");
+	return language && *language ? language : "C";
+}
+
+bool setSystemPaths()
+{
+	const char *user = std::getenv("LUANTI_USER_PATH");
+	if (!user || !*user)
+		user = std::getenv("MINETEST_USER_PATH");
+	if (!user || !*user)
+		user = ".";
+	path_user = user;
+	path_share = path_user;
+	path_cache = path_user + "/cache";
+	return true;
+}
+
+void openURIAndroid(const char *) {}
+void shareFileAndroid(const std::string &) {}
+void setPlayingNowNotification(bool) {}
+void showTextInputDialog(const std::string &, const std::string &, int) {}
+void showComboBoxDialog(const std::string *, s32, s32) {}
+std::string getInputDialogMessage() { return {}; }
+bool hasPhysicalKeyboardAndroid() { return false; }
+}
 
 namespace {
 JavaVM *g_vm = nullptr;
