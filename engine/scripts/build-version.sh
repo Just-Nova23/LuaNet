@@ -70,11 +70,45 @@ if [[ ! -d "$DEPS/arm64-v8a" ]]; then
 fi
 ABI_DEPS="$DEPS/arm64-v8a"
 SQLITE_DIR="$ABI_DEPS/SQLite"
+IRRLICHT_REPOSITORY="https://github.com/minetest/irrlicht.git"
+IRRLICHT_TAG="1.9.0mt0"
+IRRLICHT_COMMIT="03ad637114ffb255f5b9d36c204072e8d263022f"
+IRRLICHT_CACHE="$ROOT/.cache/irrlichtmt.git"
+IRRLICHT_ROOT="$ROOT/build/legacy-irrlicht/$IRRLICHT_COMMIT"
+IRRLICHT_STUB_DIR="$ROOT/build/legacy-irrlicht/android-arm64"
+IRRLICHT_STUB_LIB="$IRRLICHT_STUB_DIR/libIrrlicht.a"
+if [[ ! -d "$IRRLICHT_ROOT/include" ]]; then
+  if [[ ! -d "$IRRLICHT_CACHE" ]]; then
+    git init --bare "$IRRLICHT_CACHE"
+    git -C "$IRRLICHT_CACHE" remote add origin "$IRRLICHT_REPOSITORY"
+  fi
+  git -C "$IRRLICHT_CACHE" remote set-url origin "$IRRLICHT_REPOSITORY"
+  git -C "$IRRLICHT_CACHE" fetch --force --depth 1 origin "refs/tags/$IRRLICHT_TAG:refs/tags/$IRRLICHT_TAG"
+  IRRLICHT_ACTUAL="$(git -C "$IRRLICHT_CACHE" rev-parse "refs/tags/$IRRLICHT_TAG^{}")"
+  if [[ "$IRRLICHT_ACTUAL" != "$IRRLICHT_COMMIT" ]]; then
+    echo "Irrlicht header verification failed: expected $IRRLICHT_COMMIT, got $IRRLICHT_ACTUAL" >&2
+    exit 67
+  fi
+  IRRLICHT_SOURCE="$(mktemp -d "$WORK_ROOT/irrlicht.XXXXXX")"
+  git clone --quiet --no-checkout "$IRRLICHT_CACHE" "$IRRLICHT_SOURCE"
+  git -C "$IRRLICHT_SOURCE" checkout -q --detach "$IRRLICHT_COMMIT"
+  mkdir -p "$IRRLICHT_ROOT"
+  cp -a "$IRRLICHT_SOURCE/include" "$IRRLICHT_ROOT/"
+  rm -rf "$IRRLICHT_SOURCE"
+fi
+if [[ ! -f "$IRRLICHT_STUB_LIB" ]]; then
+  TOOLCHAIN_BIN="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d -print -quit)/bin"
+  mkdir -p "$IRRLICHT_STUB_DIR"
+  printf 'void luanet_irrlicht_stub(void) {}\n' > "$IRRLICHT_STUB_DIR/irrlicht_stub.c"
+  "$TOOLCHAIN_BIN/aarch64-linux-android29-clang" -c "$IRRLICHT_STUB_DIR/irrlicht_stub.c" -o "$IRRLICHT_STUB_DIR/irrlicht_stub.o"
+  "$TOOLCHAIN_BIN/llvm-ar" rcs "$IRRLICHT_STUB_LIB" "$IRRLICHT_STUB_DIR/irrlicht_stub.o"
+fi
 
 cmake -S "$SOURCE" -B "$BUILD" -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-29 -DANDROID_STL=c++_shared \
   -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+  -DIRRLICHT_INCLUDE_DIR="$IRRLICHT_ROOT/include" -DIRRLICHT_LIBRARY="$IRRLICHT_STUB_LIB" \
   -DSQLITE3_INCLUDE_DIR="$SQLITE_DIR/include" -DSQLITE3_LIBRARY="$SQLITE_DIR/libsqlite3.a" \
   -DSQLite3_INCLUDE_DIR="$SQLITE_DIR/include" -DSQLite3_LIBRARY="$SQLITE_DIR/libsqlite3.a" \
   -DBUILD_CLIENT=OFF -DBUILD_SERVER=ON -DBUILD_UNITTESTS=OFF -DBUILD_BENCHMARKS=OFF \
