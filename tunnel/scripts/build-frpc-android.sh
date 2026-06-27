@@ -29,6 +29,8 @@ SOURCE="$(mktemp -d "$WORK_ROOT/frp.XXXXXX")"
 trap 'rm -rf "$SOURCE"' EXIT
 git clone --quiet --no-checkout "$CACHE" "$SOURCE"
 git -C "$SOURCE" checkout -q --detach "$FRP_COMMIT"
+mkdir -p "$SOURCE/web/frpc/dist"
+printf '<!doctype html><title>LuaNet frpc</title>\n' > "$SOURCE/web/frpc/dist/index.html"
 
 mkdir -p "$OUTPUT"
 (
