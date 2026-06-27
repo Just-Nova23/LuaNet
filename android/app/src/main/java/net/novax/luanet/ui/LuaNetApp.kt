@@ -95,6 +95,7 @@ import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.ServerState
 import net.novax.luanet.runtime.OrchestratorService
 import net.novax.luanet.runtime.RuntimeRegistry
+import net.novax.luanet.runtime.RuntimeSnapshot
 
 private sealed interface Destination {
     data object Servers : Destination
@@ -106,6 +107,7 @@ private sealed interface Destination {
 fun LuaNetApp(viewModel: MainViewModel) {
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val content by viewModel.content.collectAsStateWithLifecycle()
+    val account by viewModel.account.collectAsStateWithLifecycle()
     var destination: Destination by remember { mutableStateOf(Destination.Servers) }
     when (val current = destination) {
         Destination.Servers -> ServerList(
@@ -130,6 +132,11 @@ fun LuaNetApp(viewModel: MainViewModel) {
             contentState = content,
             onSearchContent = viewModel::searchContent,
             onInstallContent = viewModel::installContent,
+            accountState = account,
+            onSaveAccountToken = viewModel::saveAccountToken,
+            onSyncEntitlement = viewModel::syncEntitlement,
+            onStartPublicTunnel = viewModel::startPublicTunnel,
+            onStopPublicTunnel = viewModel::stopPublicTunnel,
         )
     }
 }
@@ -352,6 +359,11 @@ private fun Dashboard(
     contentState: ContentBrowserState,
     onSearchContent: (String, String, String) -> Unit,
     onInstallContent: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
+    accountState: AccountState,
+    onSaveAccountToken: (String) -> Unit,
+    onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
+    onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
+    onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
 ) {
     if (profile == null) return
     val context = LocalContext.current
@@ -388,7 +400,14 @@ private fun Dashboard(
             }
             HorizontalDivider()
             when (selectedTab) {
-                0 -> Overview(profile, runtime?.state, runtime?.localPort ?: profile.localPort, context)
+                0 -> Overview(
+                    profile = profile,
+                    runtime = runtime,
+                    localPort = runtime?.localPort ?: profile.localPort,
+                    context = context,
+                    onStartPublicTunnel = onStartPublicTunnel,
+                    onStopPublicTunnel = onStopPublicTunnel,
+                )
                 1 -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
                 }
@@ -396,7 +415,7 @@ private fun Dashboard(
                     OrchestratorService.command(context, profile.id, command)
                 }
                 3 -> ContentPanel(profile, contentState, onSearchContent, onInstallContent, onImportArchive)
-                4 -> AutoOffSettings(profile, onUpdateAutoOff)
+                4 -> SettingsPanel(profile, accountState, onUpdateAutoOff, onSaveAccountToken, onSyncEntitlement)
                 5 -> BackupPanel(profile, onCreateBackup)
             }
         }
@@ -608,17 +627,57 @@ private fun BackupPanel(
 }
 
 @Composable
-private fun AutoOffSettings(
+private fun SettingsPanel(
     profile: ServerProfileEntity,
-    onSave: (String, Boolean, Int) -> Unit,
+    account: AccountState,
+    onSaveAutoOff: (String, Boolean, Int) -> Unit,
+    onSaveAccountToken: (String) -> Unit,
+    onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
 ) {
     var enabled by remember(profile.id, profile.autoOffEnabled) { mutableStateOf(profile.autoOffEnabled) }
     var minutes by remember(profile.id, profile.autoOffMinutes) { mutableStateOf(profile.autoOffMinutes.toString()) }
+    var token by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf<String?>(null) }
     val parsedMinutes = minutes.toIntOrNull()
     LazyColumn(
         Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        item { Text("NovaX account", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(if (account.tokenConfigured) "Token configured" else "No account token", style = MaterialTheme.typography.titleMedium)
+                    Text("Current tier: ${account.tier.name.lowercase().replaceFirstChar(Char::uppercase)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (account.expiresAt != null) Text("Expires: ${account.expiresAt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Temporary debug auth accepts dev:<uid>. Production will use Firebase ID tokens from Google/email sign-in.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        item {
+            OutlinedTextField(
+                value = token,
+                onValueChange = { token = it.take(160) },
+                label = { Text("NovaX token") },
+                placeholder = { Text("dev:tester") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = {
+                    onSaveAccountToken(token)
+                    message = if (token.isBlank()) "Account token cleared" else "Account token saved"
+                    token = ""
+                }, modifier = Modifier.weight(1f)) { Text("Save token") }
+                FilledTonalButton(onClick = {
+                    onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) }
+                }, enabled = account.tokenConfigured, modifier = Modifier.weight(1f)) { Text("Sync") }
+            }
+        }
+        message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) } }
+        item { HorizontalDivider(Modifier.padding(vertical = 6.dp)) }
         item { Text("Auto off", style = MaterialTheme.typography.headlineSmall) }
         item { Toggle("Stop when nobody is connected", "Timer starts when the last player leaves", enabled) { enabled = it } }
         item {
@@ -633,7 +692,7 @@ private fun AutoOffSettings(
         }
         item {
             Button(
-                onClick = { onSave(profile.id, enabled, parsedMinutes ?: profile.autoOffMinutes) },
+                onClick = { onSaveAutoOff(profile.id, enabled, parsedMinutes ?: profile.autoOffMinutes) },
                 enabled = !enabled || (parsedMinutes != null && parsedMinutes in 1..1_440),
                 modifier = Modifier.fillMaxWidth(),
             ) { Text("Save auto off") }
@@ -645,10 +704,22 @@ private fun AutoOffSettings(
 }
 
 @Composable
-private fun Overview(profile: ServerProfileEntity, runtimeState: String?, localPort: Int?, context: Context) {
+private fun Overview(
+    profile: ServerProfileEntity,
+    runtime: RuntimeSnapshot?,
+    localPort: Int?,
+    context: Context,
+    onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
+    onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
+) {
+    var publicMessage by remember(profile.id) { mutableStateOf<String?>(null) }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        val runtimeState = runtime?.state
         val running = runtimeState in setOf("STARTING", "RUNNING") || profile.state in setOf(ServerState.STARTING, ServerState.RUNNING)
         val state = runtimeState ?: profile.state.name
+        val publicHost = runtime?.publicHost ?: profile.publicHost
+        val publicPort = runtime?.publicPort ?: profile.publicPort
+        val publicEnabled = publicHost != null && publicPort != null && (runtime?.publicPort != null || profile.publicEnabled)
         item { Spacer(Modifier.height(4.dp)) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = if (running) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
@@ -696,10 +767,29 @@ private fun Overview(profile: ServerProfileEntity, runtimeState: String?, localP
         }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.tertiary); Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) { Text("Public access", style = MaterialTheme.typography.titleMedium); Text("Optional NovaX tunnel · LAN never needs an account or ad", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    Text("Off", style = MaterialTheme.typography.labelLarge)
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.tertiary); Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("Public access", style = MaterialTheme.typography.titleMedium)
+                            Text("Optional NovaX UDP tunnel · LAN never needs an account", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Text(if (publicEnabled) "On" else "Off", style = MaterialTheme.typography.labelLarge)
+                    }
+                    if (publicEnabled) {
+                        Text("$publicHost:$publicPort", style = MaterialTheme.typography.headlineSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(onClick = { copy(context, "$publicHost:$publicPort") }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy") }
+                            Button(onClick = { onStopPublicTunnel(profile.id) { result -> publicMessage = result.fold({ it }, { it.message ?: "Tunnel stop failed" }) } }) { Text("Stop public") }
+                        }
+                    } else {
+                        Button(
+                            onClick = { onStartPublicTunnel(profile.id, localPort ?: 0) { result -> publicMessage = result.fold({ it }, { it.message ?: "Tunnel start failed" }) } },
+                            enabled = running && localPort != null && localPort > 0,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Start public tunnel") }
+                    }
+                    publicMessage?.let { Text(it, color = if (it.contains("failed", ignoreCase = true) || it.contains("required", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
             }
         }

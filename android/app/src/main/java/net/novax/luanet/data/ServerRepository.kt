@@ -58,6 +58,8 @@ class ServerRepository(
     suspend fun profile(id: String) = dao.profile(id)
     suspend fun activeProfiles() = dao.activeProfiles()
     suspend fun updateRuntime(id: String, state: ServerState, port: Int?) = dao.updateRuntime(id, state, port, System.currentTimeMillis())
+    suspend fun updatePublic(id: String, enabled: Boolean, host: String?, port: Int?) =
+        dao.updatePublic(id, enabled, host, port, System.currentTimeMillis())
 
     suspend fun updateAutoOff(id: String, enabled: Boolean, minutes: Int) {
         require(minutes in 1..1_440) { "Auto off must be between 1 minute and 24 hours" }

@@ -11,6 +11,9 @@ data class RuntimeSnapshot(
     val localPort: Int,
     val players: Set<String> = emptySet(),
     val logs: List<String> = emptyList(),
+    val publicHost: String? = null,
+    val publicPort: Int? = null,
+    val publicExpiresAt: String? = null,
 )
 
 object RuntimeRegistry {
@@ -24,4 +27,3 @@ object RuntimeRegistry {
         mutable.value = copy
     }
 }
-

@@ -18,9 +18,12 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import net.novax.luanet.LuaNetApplication
@@ -28,11 +31,14 @@ import net.novax.luanet.R
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.EntitlementPolicy
 import net.novax.luanet.domain.ServerState
+import net.novax.luanet.network.TunnelLease
 import java.io.File
+import java.time.Instant
 
 class OrchestratorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = mutableMapOf<String, BoundEngine>()
+    private val tunnels = mutableMapOf<String, BoundTunnel>()
     private val callback = Messenger(CallbackHandler())
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -40,6 +46,7 @@ class OrchestratorService : Service() {
     private val entitlement by lazy { EntitlementStore(this) }
 
     private val repository get() = (application as LuaNetApplication).container.servers
+    private val controlPlane get() = (application as LuaNetApplication).container.controlPlane
 
     override fun onCreate() {
         super.onCreate()
@@ -55,6 +62,8 @@ class OrchestratorService : Service() {
             ACTION_START -> if (profileId != null) scope.launch { startProfile(profileId) }
             ACTION_STOP -> if (profileId != null) stopProfile(profileId)
             ACTION_COMMAND -> if (profileId != null) sendCommand(profileId, intent.getStringExtra(EXTRA_COMMAND).orEmpty())
+            ACTION_PUBLIC_START -> if (profileId != null) startPublicTunnel(profileId, intent.getStringExtra(EXTRA_LEASE).orEmpty())
+            ACTION_PUBLIC_STOP -> if (profileId != null) stopPublicTunnel(profileId)
             ACTION_STOP_ALL -> sessions.keys.toList().forEach(::stopProfile)
         }
         if (intent?.action == ACTION_COMMAND && sessions.isEmpty()) stopSelf()
@@ -64,6 +73,7 @@ class OrchestratorService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onDestroy() {
+        tunnels.keys.toList().forEach { stopPublicTunnel(it) }
         sessions.keys.toList().forEach(::stopProfile)
         mainHandler.removeCallbacks(idleCheck)
         wakeLock?.takeIf { it.isHeld }?.release()
@@ -126,6 +136,7 @@ class OrchestratorService : Service() {
 
     private fun stopProfile(profileId: String) {
         val engine = sessions[profileId] ?: return
+        stopPublicTunnel(profileId)
         EngineProtocol.send(engine.messenger, EngineProtocol.STOP, callback)
         scope.launch { repository.updateRuntime(profileId, ServerState.STOPPING, 30_000 + engine.slot) }
     }
@@ -144,6 +155,7 @@ class OrchestratorService : Service() {
     }
 
     private fun engineEnded(profileId: String, state: String) {
+        stopPublicTunnel(profileId)
         val engine = sessions.remove(profileId)
         if (engine != null) runCatching { unbindService(engine.connection) }
         val serverState = runCatching { ServerState.valueOf(state) }.getOrDefault(ServerState.CRASHED)
@@ -151,6 +163,72 @@ class OrchestratorService : Service() {
         RuntimeRegistry.update(profileId) { previous -> previous?.copy(state = state, localPort = 0) }
         updateNotification()
         if (sessions.isEmpty()) stopSelf()
+    }
+
+    private fun startPublicTunnel(profileId: String, leaseJson: String) {
+        val snapshot = RuntimeRegistry.sessions.value[profileId] ?: return
+        if (snapshot.localPort <= 0 || snapshot.state !in setOf("STARTING", "RUNNING")) return
+        if (tunnels.containsKey(profileId)) return
+        val lease = runCatching { Json.decodeFromString<TunnelLease>(leaseJson) }.getOrElse { error ->
+            RuntimeRegistry.update(profileId) { previous ->
+                previous?.copy(logs = (previous.logs + "Public tunnel failed: ${error.message}").takeLast(2_000))
+            }
+            return
+        }
+        val frp = FrpSupervisor(this)
+        runCatching {
+            frp.start(FrpLeaseConfiguration(
+                leaseId = lease.id,
+                sessionToken = lease.sessionToken,
+                serverHost = lease.frpServerHost,
+                serverPort = lease.frpServerPort,
+                localPort = snapshot.localPort,
+                remotePort = lease.publicPort,
+            ))
+        }.onFailure { error ->
+            scope.launch { runCatching { controlPlane.release(lease.id) } }
+            RuntimeRegistry.update(profileId) { previous ->
+                previous?.copy(logs = (previous.logs + "Public tunnel failed: ${error.message}").takeLast(2_000))
+            }
+            return
+        }
+        val expiry = scope.launch {
+            val delayMs = Instant.parse(lease.expiresAt).toEpochMilli() - System.currentTimeMillis()
+            delay(delayMs.coerceAtLeast(0))
+            stopPublicTunnel(profileId)
+        }
+        tunnels[profileId] = BoundTunnel(frp, lease.id, expiry)
+        scope.launch { repository.updatePublic(profileId, true, lease.publicHost, lease.publicPort) }
+        RuntimeRegistry.update(profileId) { previous ->
+            previous?.copy(
+                publicHost = lease.publicHost,
+                publicPort = lease.publicPort,
+                publicExpiresAt = lease.expiresAt,
+                logs = (previous.logs + "Public tunnel active at ${lease.publicHost}:${lease.publicPort}").takeLast(2_000),
+            )
+        }
+        updateNotification()
+    }
+
+    private fun stopPublicTunnel(profileId: String) {
+        val tunnel = tunnels.remove(profileId)
+        if (tunnel == null) {
+            scope.launch { repository.updatePublic(profileId, false, null, null) }
+            RuntimeRegistry.update(profileId) { previous ->
+                previous?.copy(publicHost = null, publicPort = null, publicExpiresAt = null)
+            }
+            return
+        }
+        tunnel.expiry.cancel()
+        tunnel.frp.stop()
+        scope.launch {
+            runCatching { controlPlane.release(tunnel.leaseId) }
+            repository.updatePublic(profileId, false, null, null)
+        }
+        RuntimeRegistry.update(profileId) { previous ->
+            previous?.copy(publicHost = null, publicPort = null, publicExpiresAt = null)
+        }
+        updateNotification()
     }
 
     private inner class CallbackHandler : Handler(Looper.getMainLooper()) {
@@ -215,7 +293,10 @@ class OrchestratorService : Service() {
         .setOngoing(true).setOnlyAlertOnce(true).build()
 
     private fun updateNotification() {
-        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification("${sessions.size} server(s) active"))
+        getSystemService(NotificationManager::class.java).notify(
+            NOTIFICATION_ID,
+            notification("${sessions.size} server(s), ${tunnels.size} public tunnel(s) active"),
+        )
     }
 
     private fun acquireLocks() {
@@ -251,6 +332,12 @@ class OrchestratorService : Service() {
         var emptySince: Long?,
     )
 
+    private data class BoundTunnel(
+        val frp: FrpSupervisor,
+        val leaseId: String,
+        val expiry: Job,
+    )
+
     companion object {
         private const val CHANNEL_ID = "hosted_servers"
         private const val NOTIFICATION_ID = 100
@@ -258,8 +345,11 @@ class OrchestratorService : Service() {
         const val ACTION_START = "net.novax.luanet.START"
         const val ACTION_STOP = "net.novax.luanet.STOP"
         const val ACTION_COMMAND = "net.novax.luanet.COMMAND"
+        const val ACTION_PUBLIC_START = "net.novax.luanet.PUBLIC_START"
+        const val ACTION_PUBLIC_STOP = "net.novax.luanet.PUBLIC_STOP"
         const val ACTION_STOP_ALL = "net.novax.luanet.STOP_ALL"
         const val EXTRA_COMMAND = "command"
+        const val EXTRA_LEASE = "lease"
 
         fun start(context: Context, profileId: String) = ContextCompat.startForegroundService(
             context, Intent(context, OrchestratorService::class.java).setAction(ACTION_START).putExtra(EXTRA_PROFILE_ID, profileId)
@@ -272,6 +362,17 @@ class OrchestratorService : Service() {
                 .setAction(ACTION_COMMAND)
                 .putExtra(EXTRA_PROFILE_ID, profileId)
                 .putExtra(EXTRA_COMMAND, command)
+        )
+        fun startPublic(context: Context, profileId: String, lease: TunnelLease) = ContextCompat.startForegroundService(
+            context, Intent(context, OrchestratorService::class.java)
+                .setAction(ACTION_PUBLIC_START)
+                .putExtra(EXTRA_PROFILE_ID, profileId)
+                .putExtra(EXTRA_LEASE, Json.encodeToString(lease))
+        )
+        fun stopPublic(context: Context, profileId: String) = ContextCompat.startForegroundService(
+            context, Intent(context, OrchestratorService::class.java)
+                .setAction(ACTION_PUBLIC_STOP)
+                .putExtra(EXTRA_PROFILE_ID, profileId)
         )
     }
 }

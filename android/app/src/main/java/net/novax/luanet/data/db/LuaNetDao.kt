@@ -29,6 +29,9 @@ interface LuaNetDao {
     @Query("UPDATE server_profiles SET state=:state, localPort=:localPort, updatedAt=:updatedAt WHERE id=:id")
     suspend fun updateRuntime(id: String, state: ServerState, localPort: Int?, updatedAt: Long)
 
+    @Query("UPDATE server_profiles SET publicEnabled=:enabled, publicHost=:host, publicPort=:port, updatedAt=:updatedAt WHERE id=:id")
+    suspend fun updatePublic(id: String, enabled: Boolean, host: String?, port: Int?, updatedAt: Long)
+
     @Query("SELECT * FROM installed_packages WHERE profileId=:profileId ORDER BY type,title")
     fun observePackages(profileId: String): Flow<List<InstalledPackageEntity>>
 
@@ -45,4 +48,3 @@ interface LuaNetDao {
 
     @Delete suspend fun deleteBackup(backup: BackupEntity)
 }
-
