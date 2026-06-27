@@ -69,7 +69,7 @@ def main() -> None:
     if porting_cpp.exists():
         porting = porting_cpp.read_text()
         linux_branch = "#elif defined(__linux__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__DragonFly__)"
-        if "#elif defined(__ANDROID__)" not in porting and linux_branch in porting:
+        if "extern bool setSystemPaths();" not in porting and linux_branch in porting:
             porting = porting.replace(
                 linux_branch,
                 "#elif defined(__ANDROID__)\n\n"
