@@ -36,6 +36,11 @@ def main() -> None:
         "\tlist(APPEND common_SRCS porting_android.cpp)",
         "\t# LuaNet headless Android server provides porting_android replacements in the JNI bridge.",
     )
+    text = re.sub(
+        r"\n\t\tCreateLegacyAlias\(minetestserver_alias[^\n]*\)",
+        "\n\t\t# LuaNet builds the server as an Android shared library, not a legacy executable alias.",
+        text,
+    )
     cmake.write_text(text.replace(marker, injection + marker, 1))
 
 
