@@ -45,7 +45,47 @@ android {
         compose = true
         buildConfig = true
     }
+    sourceSets["main"].jniLibs.srcDir(layout.projectDirectory.dir("../../engine/build/android-jni"))
     packaging.resources.excludes += setOf("META-INF/LICENSE*", "META-INF/NOTICE*")
+}
+
+val nativeArtifactDir = layout.projectDirectory.dir("../../engine/build/android-jni/arm64-v8a")
+val releaseNativeLibraries = listOf(
+    "libfrpc.so",
+    "libluanet_engine_5_0_1.so",
+    "libluanet_engine_5_1_1.so",
+    "libluanet_engine_5_2_0.so",
+    "libluanet_engine_5_3_0.so",
+    "libluanet_engine_5_4_1.so",
+    "libluanet_engine_5_5_1.so",
+    "libluanet_engine_5_6_1.so",
+    "libluanet_engine_5_7_0.so",
+    "libluanet_engine_5_8_0.so",
+    "libluanet_engine_5_9_1.so",
+    "libluanet_engine_5_10_0.so",
+    "libluanet_engine_5_11_0.so",
+    "libluanet_engine_5_12_0.so",
+    "libluanet_engine_5_13_0.so",
+    "libluanet_engine_5_14_0.so",
+    "libluanet_engine_5_15_2.so",
+    "libluanet_engine_5_16_1.so",
+)
+
+tasks.register("checkReleaseNativeArtifacts") {
+    doLast {
+        val abiDir = nativeArtifactDir.asFile
+        val missing = releaseNativeLibraries.filterNot { abiDir.resolve(it).isFile }
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Missing release native artifacts in ${abiDir.path}: ${missing.joinToString()}. " +
+                    "Run engine/scripts/build-all.sh and engine/scripts/sync-android-artifacts.sh before release packaging.",
+            )
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn("checkReleaseNativeArtifacts")
 }
 
 dependencies {

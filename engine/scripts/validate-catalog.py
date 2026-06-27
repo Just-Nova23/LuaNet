@@ -30,4 +30,12 @@ if android_catalog.exists():
         assert library == expected["library"], f"Android library mismatch for {version}: {library} != {expected['library']}"
         if expected["base"]:
             assert module.strip() == "null", f"Base engine {version} must stay in the base APK"
+gradle_build = repo / "android/app/build.gradle.kts"
+if gradle_build.exists():
+    text = gradle_build.read_text()
+    expected_libraries = {f'lib{item["library"]}.so' for item in engines}
+    declared_libraries = set(re.findall(r'"(libluanet_engine_[^"]+\.so)"', text))
+    missing = sorted(expected_libraries - declared_libraries)
+    assert not missing, f"Gradle release native check misses: {', '.join(missing)}"
+    assert '"libfrpc.so"' in text, "Gradle release native check must require FRP client"
 print(f"validated {len(engines)} pinned Luanti engines")

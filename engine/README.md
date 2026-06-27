@@ -14,11 +14,15 @@ python3 scripts/validate-catalog.py
 scripts/build-version.sh 5.16.1
 # or, after validating one version on the current NDK:
 scripts/build-all.sh
+FRPC_ARTIFACT=/path/to/libfrpc.so scripts/sync-android-artifacts.sh
 ```
 
 The script fetches a tag, verifies the resolved 40-character commit, converts only the
 dedicated-server CMake target into a shared Android library, disables unavailable server
 backends, and emits checksummed files below `build/artifacts/<version>`.
+`sync-android-artifacts.sh` copies those checked libraries into `build/android-jni/arm64-v8a`,
+the generated native source directory consumed by Gradle. Release packaging fails until all
+17 engine libraries and `libfrpc.so` are present there.
 
 Luanti changed its Android dependencies and build layout over this long version range.
 The CI smoke matrix is the authority for compatibility; version-specific transformations
@@ -29,4 +33,3 @@ both old `MINETEST_*` and current `LUANTI_*` environment variables, streams logs
 events to Kotlin, and requests a graceful stop through Luanti's kill-status interface.
 Console execution still requires the LuaNet runtime server mod; the JNI method never grants
 trusted-mod access or disables Luanti's security sandbox.
-

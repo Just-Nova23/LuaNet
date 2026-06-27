@@ -85,6 +85,13 @@ class OrchestratorService : Service() {
         val slot = (0 until 5).firstOrNull { candidate -> sessions.values.none { it.slot == candidate } } ?: return
         val port = 30_000 + slot
         val release = EngineCatalog.find(profile.engineVersion) ?: return
+        val library = File(applicationInfo.nativeLibraryDir, "lib${release.libraryName}.so")
+        if (!library.isFile) {
+            val text = "Engine ${profile.engineVersion} is not bundled in this APK. Build native artifacts and sync them before starting this server."
+            repository.updateRuntime(profileId, ServerState.CRASHED, null)
+            RuntimeRegistry.update(profileId) { RuntimeSnapshot(profileId, "CRASHED", -1, 0, logs = listOf(text)) }
+            return
+        }
         val root = repository.profileDirectory(profile.id).apply { mkdirs() }
         val world = File(root, "world").apply { mkdirs() }
         val config = File(root, "minetest.conf")
