@@ -4,6 +4,7 @@
 
 #include "luanet_engine.h"
 
+#include "irrlichttypes_bloated.h"
 #include "porting.h"
 #include "util/numeric.h"
 
@@ -50,6 +51,8 @@ void showTextInputDialog(const std::string &, const std::string &, int) {}
 void showComboBoxDialog(const std::string *, s32, s32) {}
 std::string getInputDialogMessage() { return {}; }
 bool hasPhysicalKeyboardAndroid() { return false; }
+float getDisplayDensity() { return 1.0f; }
+v2u32 getDisplaySize() { return v2u32(1280, 720); }
 }
 
 namespace {
