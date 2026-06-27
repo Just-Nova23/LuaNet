@@ -15,9 +15,9 @@ if ! command -v go >/dev/null 2>&1; then
 fi
 
 if [[ ! -d "$CACHE" ]]; then
-  git clone --bare --filter=blob:none "$REPOSITORY" "$CACHE"
+  git init --bare "$CACHE"
 fi
-git -C "$CACHE" fetch --force --depth 1 origin "refs/tags/$FRP_VERSION:refs/tags/$FRP_VERSION"
+git -C "$CACHE" fetch --force --depth 1 "$REPOSITORY" "refs/tags/$FRP_VERSION:refs/tags/$FRP_VERSION"
 ACTUAL="$(git -C "$CACHE" rev-parse "refs/tags/$FRP_VERSION^{}")"
 if [[ "$ACTUAL" != "$FRP_COMMIT" ]]; then
   echo "source verification failed: expected $FRP_COMMIT, got $ACTUAL" >&2
