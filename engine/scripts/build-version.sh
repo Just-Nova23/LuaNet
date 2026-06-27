@@ -30,9 +30,20 @@ WORK_ROOT="$ROOT/build/work"
 OUTPUT="$ROOT/build/artifacts/$VERSION"
 
 if [[ ! -d "$CACHE" ]]; then
-  git clone --bare --filter=blob:none "$REPOSITORY" "$CACHE"
+  git init --bare "$CACHE"
+  git -C "$CACHE" remote add origin "$REPOSITORY"
 fi
-git -C "$CACHE" fetch --force --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG"
+git -C "$CACHE" remote set-url origin "$REPOSITORY"
+for attempt in 1 2 3; do
+  if git -C "$CACHE" fetch --force --depth 1 origin "refs/tags/$TAG:refs/tags/$TAG"; then
+    break
+  fi
+  if [[ "$attempt" == 3 ]]; then
+    echo "failed to fetch Luanti $TAG after $attempt attempts" >&2
+    exit 66
+  fi
+  sleep "$((attempt * 5))"
+done
 ACTUAL="$(git -C "$CACHE" rev-parse "refs/tags/$TAG^{}")"
 if [[ "$ACTUAL" != "$COMMIT" ]]; then
   echo "source verification failed: expected $COMMIT, got $ACTUAL" >&2
