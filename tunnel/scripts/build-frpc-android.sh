@@ -8,6 +8,8 @@ REPOSITORY="${FRP_REPOSITORY:-https://github.com/fatedier/frp.git}"
 CACHE="$ROOT/.cache/frp.git"
 WORK_ROOT="$ROOT/build/work"
 OUTPUT="$ROOT/build/android-arm64"
+FRPC_GOOS="${FRPC_GOOS:-linux}"
+FRPC_GOARCH="${FRPC_GOARCH:-arm64}"
 
 if ! command -v go >/dev/null 2>&1; then
   echo "Go is required to build frpc" >&2
@@ -35,7 +37,7 @@ printf '<!doctype html><title>LuaNet frpc</title>\n' > "$SOURCE/web/frpc/dist/in
 mkdir -p "$OUTPUT"
 (
   cd "$SOURCE"
-  env CGO_ENABLED=0 GOOS=android GOARCH=arm64 \
+  env CGO_ENABLED=0 GOOS="$FRPC_GOOS" GOARCH="$FRPC_GOARCH" \
     go build -trimpath -ldflags="-s -w -buildid=" -o "$OUTPUT/libfrpc.so" ./cmd/frpc
 )
 chmod 0755 "$OUTPUT/libfrpc.so"

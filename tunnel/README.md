@@ -12,4 +12,7 @@ FRPC_ARTIFACT=tunnel/build/android-arm64/libfrpc.so engine/scripts/sync-android-
 ```
 
 The script fetches the official `fatedier/frp` tag `v0.69.0`, verifies the dereferenced tag
-commit, and cross-compiles `./cmd/frpc` for `GOOS=android GOARCH=arm64`.
+commit, and cross-compiles `./cmd/frpc` as a static arm64 Linux ELF. `GOOS=android` is avoided
+because FRP 0.69 currently pulls `github.com/wlynxg/anet`, which linknames Go internals that do
+not resolve for the Android target; the static arm64 Linux ELF can still be executed by Android's
+Linux kernel from the app native library directory.
