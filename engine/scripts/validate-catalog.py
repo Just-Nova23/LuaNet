@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
+repo = root.parent
 catalog = json.loads((root / "catalog.json").read_text())
 engines = catalog["engines"]
 assert len(engines) == 17
@@ -14,4 +15,19 @@ assert len({item["library"] for item in engines}) == len(engines)
 for item in engines:
     assert re.fullmatch(r"[0-9a-f]{40}", item["commit"])
     assert item["tag"] == item["version"]
+android_catalog = repo / "android/app/src/main/java/net/novax/luanet/domain/EngineCatalog.kt"
+if android_catalog.exists():
+    text = android_catalog.read_text()
+    releases = re.findall(
+        r'EngineRelease\("([^"]+)",\s*\d+,\s*\d+,\s*"([^"]+)",\s*([^)]+)\)',
+        text,
+    )
+    assert len(releases) == len(engines), "Android EngineCatalog release count diverges"
+    by_version = {item["version"]: item for item in engines}
+    for version, library, module in releases:
+        assert version in by_version, f"Android declares unknown engine {version}"
+        expected = by_version[version]
+        assert library == expected["library"], f"Android library mismatch for {version}: {library} != {expected['library']}"
+        if expected["base"]:
+            assert module.strip() == "null", f"Base engine {version} must stay in the base APK"
 print(f"validated {len(engines)} pinned Luanti engines")
