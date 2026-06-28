@@ -121,13 +121,15 @@ class OrchestratorService : Service() {
         val packages = repository.packages(profile.id)
         writeWorldConfig(world, profile.gameKey, packages, File(root, "mods"))
         val config = File(root, "minetest.conf")
-        writeConfig(config, profile.name, port, profile.maxPlayers, profile.creative, profile.damage, profile.pvp)
+        val customSettings = repository.configSettings(profile.id).associate { it.key to it.value }
+        writeConfig(config, profile, port, customSettings)
         val engineConfiguration = EngineConfiguration(
             profile.id, profile.engineVersion, release.libraryName, root.absolutePath,
             world.absolutePath, config.absolutePath, port, profile.gameKey?.substringAfter('/'),
             "__luanet_console_${profile.id.take(8)}",
         )
         repository.updateRuntime(profile.id, ServerState.STARTING, port)
+        repository.markAllPlayersOffline(profile.id)
         RuntimeRegistry.update(profile.id) {
             RuntimeSnapshot(
                 profile.id,
@@ -235,11 +237,13 @@ class OrchestratorService : Service() {
     }
 
     private fun sendCommand(profileId: String, raw: String) {
-        val command = raw.trim().removePrefix("/").trim()
-        if (command.isBlank()) return
+        val clean = raw.trim()
+        if (clean.isBlank()) return
+        val command = if (clean.startsWith("/")) clean else "/$clean"
         val engine = sessions[profileId] ?: return
+        applyCommandSideEffects(profileId, command)
         RuntimeRegistry.update(profileId) { previous ->
-            previous?.copy(logs = (previous.logs + "> /$command").takeLast(2_000))
+            previous?.copy(logs = (previous.logs + "> $command").takeLast(2_000))
         }
         EngineProtocol.send(engine.messenger, EngineProtocol.COMMAND, callback) {
             putString(EngineProtocol.KEY_PROFILE_ID, profileId)
@@ -254,6 +258,7 @@ class OrchestratorService : Service() {
         if (engine != null) runCatching { unbindService(engine.connection) }
         val serverState = runCatching { ServerState.valueOf(state) }.getOrDefault(ServerState.CRASHED)
         scope.launch { repository.updateRuntime(profileId, serverState, null) }
+        scope.launch { repository.markAllPlayersOffline(profileId) }
         RuntimeRegistry.update(profileId) { previous ->
             previous?.copy(
                 state = state,
@@ -418,6 +423,7 @@ class OrchestratorService : Service() {
         val name = rawName.cleanPlayerName()
         if (name.isBlank()) return
         sessions[profileId]?.emptySince = null
+        scope.launch { repository.markPlayerOnline(profileId, name) }
         RuntimeRegistry.update(profileId) { previous ->
             previous?.copy(players = previous.players + name)
         }
@@ -426,6 +432,7 @@ class OrchestratorService : Service() {
     private fun playerLeft(profileId: String, rawName: String) {
         val name = rawName.cleanPlayerName()
         if (name.isBlank()) return
+        scope.launch { repository.markPlayerOffline(profileId, name) }
         RuntimeRegistry.update(profileId) { previous ->
             val remaining = previous?.players.orEmpty() - name
             if (remaining.isEmpty()) sessions[profileId]?.emptySince = System.currentTimeMillis()
@@ -484,21 +491,58 @@ class OrchestratorService : Service() {
             ?.pid
     }
 
-    private fun writeConfig(file: File, name: String, port: Int, maxPlayers: Int, creative: Boolean, damage: Boolean, pvp: Boolean) {
-        file.writeText("""
-            port = $port
-            bind_address = 0.0.0.0
-            server_name = ${name.replace("\n", " ")}
-            max_users = $maxPlayers
-            creative_mode = $creative
-            enable_damage = $damage
-            enable_pvp = $pvp
-            server_announce = false
-            secure.enable_security = true
-            secure.trusted_mods =
-            secure.http_mods =
-            disallow_empty_password = true
-        """.trimIndent())
+    private fun applyCommandSideEffects(profileId: String, command: String) {
+        val parts = command.removePrefix("/").trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        val action = parts.firstOrNull()?.lowercase() ?: return
+        val player = parts.getOrNull(1)?.cleanPlayerName().orEmpty()
+        if (player.isBlank()) return
+        when (action) {
+            "ban" -> scope.launch { repository.markPlayerBanned(profileId, player, true) }
+            "unban" -> scope.launch { repository.markPlayerBanned(profileId, player, false) }
+            "grant" -> if (parts.drop(2).joinToString(" ").contains("all", ignoreCase = true)) {
+                scope.launch { repository.markPlayerAdmin(profileId, player, true) }
+            }
+            "revoke" -> if (parts.drop(2).joinToString(" ").contains("all", ignoreCase = true) ||
+                parts.drop(2).joinToString(" ").contains("server", ignoreCase = true)) {
+                scope.launch { repository.markPlayerAdmin(profileId, player, false) }
+            }
+        }
+    }
+
+    private fun writeConfig(file: File, profile: net.novax.luanet.data.db.ServerProfileEntity, port: Int, customSettings: Map<String, String>) {
+        val stepSeconds = (profile.dedicatedServerStepMs.coerceIn(20, 1_000) / 1000.0)
+        val lines = mutableListOf(
+            "port = $port",
+            "bind_address = 0.0.0.0",
+            "server_name = ${profile.name.singleLine()}",
+            "server_description = ${profile.serverDescription.singleLine()}",
+            "motd = ${profile.motd.singleLine()}",
+            "max_users = ${profile.maxPlayers}",
+            "mg_name = ${profile.mapgen}",
+            "mapgen_limit = ${profile.mapgenLimit}",
+            "creative_mode = ${profile.creative}",
+            "enable_damage = ${profile.damage}",
+            "enable_pvp = ${profile.pvp}",
+            "server_announce = ${profile.announceServer}",
+            "default_privs = ${profile.defaultPrivileges}",
+            "disallow_empty_password = ${profile.disallowEmptyPassword}",
+            "enable_rollback_recording = ${profile.enableRollback}",
+            "time_speed = ${profile.timeSpeed}",
+            "active_block_range = ${profile.activeBlockRange}",
+            "max_block_send_distance = ${profile.maxBlockSendDistance}",
+            "max_block_generate_distance = ${profile.maxBlockGenerateDistance}",
+            "dedicated_server_step = $stepSeconds",
+            "max_objects_per_block = ${profile.maxObjectsPerBlock}",
+            "item_entity_ttl = ${profile.itemEntityTtl}",
+            "max_packets_per_iteration = ${profile.maxPacketsPerIteration}",
+            "secure.enable_security = true",
+            "secure.trusted_mods =",
+            "secure.http_mods =",
+        )
+        customSettings.toSortedMap().forEach { (key, value) ->
+            if (key.matches(Regex("[A-Za-z0-9_.:-]{1,120}"))) lines += "$key = ${value.replace("\n", " ").take(512)}"
+        }
+        file.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
     }
 
     private fun writeWorldConfig(world: File, gameKey: String?, packages: List<InstalledPackageEntity>, modsRoot: File) {
@@ -551,6 +595,7 @@ class OrchestratorService : Service() {
 
     private fun String.safeModName(): String = filter { it.isLetterOrDigit() || it == '_' }.take(80)
     private fun String.safeFolderName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(80)
+    private fun String.singleLine(): String = replace("\n", " ").replace("\r", " ").take(240)
 
     private fun slotClass(slot: Int) = arrayOf(
         EngineSlot0Service::class.java, EngineSlot1Service::class.java, EngineSlot2Service::class.java,
