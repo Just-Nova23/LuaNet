@@ -8,7 +8,9 @@ import android.Manifest
 import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.PowerManager
 import android.net.Uri
+import android.provider.Settings
 import android.text.method.LinkMovementMethod
 import android.util.TypedValue
 import android.widget.TextView
@@ -1657,6 +1659,7 @@ private fun Overview(
             Button(onClick = {
                 if (running) OrchestratorService.stop(context, profile.id) else {
                     requestNotificationPermission(context)
+                    requestBackgroundHostingExemption(context)
                     OrchestratorService.start(context, profile.id)
                 }
             }, enabled = running || profile.gameKey != null, modifier = Modifier.fillMaxWidth().height(58.dp)) {
@@ -1669,9 +1672,14 @@ private fun Overview(
                 Column(Modifier.padding(18.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Lan, null, tint = MaterialTheme.colorScheme.primary); Spacer(Modifier.width(10.dp)); Text("Local address", style = MaterialTheme.typography.titleMedium) }
                     Spacer(Modifier.height(10.dp)); Text("127.0.0.1:$localPort", style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        "On the same phone, use address 127.0.0.1 and port $localPort in Luanti.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Spacer(Modifier.height(12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalButton(onClick = { copy(context, "127.0.0.1:$localPort") }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy") }
-                        FilledTonalButton(onClick = { openLuanti(context) }) { Text("Open Luanti") }
+                        FilledTonalButton(onClick = { openLuanti(context) }) { Icon(Icons.AutoMirrored.Filled.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open Luanti") }
                     }
                 }
             }
@@ -1722,5 +1730,19 @@ private fun openLuanti(context: Context) {
 private fun requestNotificationPermission(context: Context) {
     if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
         (context as? Activity)?.let { ActivityCompat.requestPermissions(it, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 41) }
+    }
+}
+
+private fun requestBackgroundHostingExemption(context: Context) {
+    if (Build.VERSION.SDK_INT < 23) return
+    val powerManager = context.getSystemService(PowerManager::class.java)
+    if (powerManager?.isIgnoringBatteryOptimizations(context.packageName) == true) return
+    val packageUri = Uri.parse("package:${context.packageName}")
+    val request = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, packageUri)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(request) }.onFailure {
+        val fallback = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, packageUri)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(fallback) }
     }
 }
