@@ -75,6 +75,49 @@ class ServerRepository(
         ))
     }
 
+    suspend fun updateServerSettings(
+        id: String,
+        name: String,
+        engineVersion: String,
+        gameKey: String?,
+        mapgen: String,
+        maxPlayers: Int,
+        creative: Boolean,
+        damage: Boolean,
+        pvp: Boolean,
+        autoOffEnabled: Boolean,
+        autoOffMinutes: Int,
+    ): ServerProfileEntity {
+        val profile = requireNotNull(dao.profile(id)) { "Server profile not found" }
+        require(profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)) { "Stop the server before changing server settings" }
+        require(name.isNotBlank()) { "Server name is required" }
+        require(EngineCatalog.find(engineVersion) != null) { "Unknown engine version" }
+        require(EngineCatalog.canUpgrade(profile.engineVersion, engineVersion)) { "Engine downgrade is not supported" }
+        require(mapgen.isNotBlank()) { "Mapgen is required" }
+        require(maxPlayers in 1..100) { "Max players must be between 1 and 100" }
+        require(autoOffMinutes in 1..1_440) { "Auto off must be between 1 minute and 24 hours" }
+        if (gameKey != null) {
+            require(packages(id).any { it.type == PackageType.GAME && it.packageKey == gameKey }) {
+                "Selected game is not installed in this server profile"
+            }
+        }
+        val updated = profile.copy(
+            name = name.trim(),
+            engineVersion = engineVersion,
+            gameKey = gameKey,
+            mapgen = mapgen.trim().take(64),
+            maxPlayers = maxPlayers,
+            creative = creative,
+            damage = damage,
+            pvp = pvp,
+            autoOffEnabled = autoOffEnabled,
+            autoOffMinutes = autoOffMinutes,
+            updatedAt = System.currentTimeMillis(),
+        )
+        dao.updateProfile(updated)
+        return updated
+    }
+
     suspend fun importArchive(
         profileId: String,
         source: Uri,

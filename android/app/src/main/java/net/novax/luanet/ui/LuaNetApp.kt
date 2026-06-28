@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Share as Cloud
 import androidx.compose.material.icons.filled.Share as ContentCopy
 import androidx.compose.material.icons.filled.Home as Dashboard
 import androidx.compose.material.icons.filled.AddCircle as FolderZip
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Forum
@@ -121,6 +122,7 @@ import net.novax.luanet.R
 import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.data.content.ContentPackage
 import net.novax.luanet.domain.EngineCatalog
+import net.novax.luanet.domain.PackageType
 import net.novax.luanet.domain.ServerState
 import net.novax.luanet.runtime.OrchestratorService
 import net.novax.luanet.runtime.RuntimeRegistry
@@ -129,10 +131,26 @@ import net.novax.luanet.runtime.RuntimeSnapshot
 private sealed interface Destination {
     data object Servers : Destination
     data object Create : Destination
+    data object Account : Destination
     data class Dashboard(val id: String) : Destination
     data class ContentLibrary(val id: String) : Destination
     data class ZipImport(val id: String) : Destination
 }
+
+private typealias ServerSettingsSaver = (
+    profileId: String,
+    name: String,
+    engineVersion: String,
+    gameKey: String?,
+    mapgen: String,
+    maxPlayers: Int,
+    creative: Boolean,
+    damage: Boolean,
+    pvp: Boolean,
+    autoOffEnabled: Boolean,
+    autoOffMinutes: Int,
+    onResult: (Result<String>) -> Unit,
+) -> Unit
 
 @Composable
 fun LuaNetApp(viewModel: MainViewModel) {
@@ -146,6 +164,13 @@ fun LuaNetApp(viewModel: MainViewModel) {
             profiles = profiles,
             onCreate = { destination = Destination.Create },
             onOpen = { destination = Destination.Dashboard(it) },
+            onOpenAccount = { destination = Destination.Account },
+        )
+        Destination.Account -> AccountScreen(
+            account = account,
+            onBack = { destination = Destination.Servers },
+            onSaveAccountToken = viewModel::saveAccountToken,
+            onSyncEntitlement = viewModel::syncEntitlement,
         )
         Destination.Create -> CreateServer(
             onBack = { destination = Destination.Servers },
@@ -163,11 +188,8 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 onBack = { destination = Destination.Servers },
                 onOpenContentLibrary = { destination = Destination.ContentLibrary(current.id) },
                 onOpenZipImport = { destination = Destination.ZipImport(current.id) },
-                onUpdateAutoOff = viewModel::updateAutoOff,
+                onSaveServerSettings = viewModel::updateServerSettings,
                 onCreateBackup = viewModel::createBackup,
-                accountState = account,
-                onSaveAccountToken = viewModel::saveAccountToken,
-                onSyncEntitlement = viewModel::syncEntitlement,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
                 onStopPublicTunnel = viewModel::stopPublicTunnel,
             )
@@ -200,7 +222,12 @@ fun LuaNetApp(viewModel: MainViewModel) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ServerList(profiles: List<ServerProfileEntity>, onCreate: () -> Unit, onOpen: (String) -> Unit) {
+private fun ServerList(
+    profiles: List<ServerProfileEntity>,
+    onCreate: () -> Unit,
+    onOpen: (String) -> Unit,
+    onOpenAccount: () -> Unit,
+) {
     val activeCount = profiles.count { it.state in setOf(ServerState.STARTING, ServerState.RUNNING) }
     Scaffold(
         topBar = { TopAppBar(title = {
@@ -213,6 +240,10 @@ private fun ServerList(profiles: List<ServerProfileEntity>, onCreate: () -> Unit
                     Text("LuaNet", style = MaterialTheme.typography.titleLarge)
                     Text("On-device Luanti hosting", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+            }
+        }, actions = {
+            IconButton(onClick = onOpenAccount) {
+                Icon(Icons.Default.AccountCircle, "Account")
             }
         }) },
         floatingActionButton = {
@@ -291,6 +322,90 @@ private fun ServerList(profiles: List<ServerProfileEntity>, onCreate: () -> Unit
                     }
                 }
                 item { Spacer(Modifier.height(80.dp)) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AccountScreen(
+    account: AccountState,
+    onBack: () -> Unit,
+    onSaveAccountToken: (String) -> Unit,
+    onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
+) {
+    var token by remember { mutableStateOf("") }
+    var message by remember { mutableStateOf<String?>(null) }
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Account")
+                        Text("NovaX public tunnel and Premium", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text(if (account.tokenConfigured) "Token configured" else "No account token", style = MaterialTheme.typography.titleMedium)
+                        Text("Current tier: ${account.tier.name.lowercase().replaceFirstChar(Char::uppercase)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (account.expiresAt != null) Text("Expires: ${account.expiresAt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            "Temporary debug auth accepts dev:<uid>. Production will use Firebase ID tokens from Google/email sign-in.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            item {
+                OutlinedTextField(
+                    value = token,
+                    onValueChange = { token = it.take(160) },
+                    label = { Text("NovaX token") },
+                    placeholder = { Text("dev:tester") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            onSaveAccountToken(token)
+                            message = if (token.isBlank()) "Account token cleared" else "Account token saved"
+                            token = ""
+                        },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Save token") }
+                    FilledTonalButton(
+                        onClick = {
+                            onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) }
+                        },
+                        enabled = account.tokenConfigured,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Sync") }
+                }
+            }
+            message?.let {
+                item {
+                    Text(
+                        it,
+                        color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
             }
         }
     }
@@ -397,11 +512,11 @@ private fun CreateServer(
 }
 
 @Composable
-private fun Toggle(label: String, detail: String? = null, value: Boolean, onChange: (Boolean) -> Unit) {
+private fun Toggle(label: String, detail: String? = null, value: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) { Text(label, fontWeight = FontWeight.Medium); if (detail != null) Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         Spacer(Modifier.width(12.dp))
-        Switch(value, onChange)
+        Switch(value, onChange, enabled = enabled)
     }
 }
 
@@ -413,11 +528,8 @@ private fun Dashboard(
     onBack: () -> Unit,
     onOpenContentLibrary: () -> Unit,
     onOpenZipImport: () -> Unit,
-    onUpdateAutoOff: (String, Boolean, Int) -> Unit,
+    onSaveServerSettings: ServerSettingsSaver,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
-    accountState: AccountState,
-    onSaveAccountToken: (String) -> Unit,
-    onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
 ) {
@@ -471,7 +583,7 @@ private fun Dashboard(
                     OrchestratorService.command(context, profile.id, command)
                 }
                 3 -> ContentSummaryPanel(profile, installedPackages, onOpenContentLibrary, onOpenZipImport)
-                4 -> SettingsPanel(profile, accountState, onUpdateAutoOff, onSaveAccountToken, onSyncEntitlement)
+                4 -> SettingsPanel(profile, installedPackages, onSaveServerSettings)
                 5 -> BackupPanel(profile, onCreateBackup)
             }
         }
@@ -1298,77 +1410,204 @@ private fun BackupPanel(
 @Composable
 private fun SettingsPanel(
     profile: ServerProfileEntity,
-    account: AccountState,
-    onSaveAutoOff: (String, Boolean, Int) -> Unit,
-    onSaveAccountToken: (String) -> Unit,
-    onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
+    installedPackages: List<InstalledPackageEntity>,
+    onSaveSettings: ServerSettingsSaver,
 ) {
-    var enabled by remember(profile.id, profile.autoOffEnabled) { mutableStateOf(profile.autoOffEnabled) }
-    var minutes by remember(profile.id, profile.autoOffMinutes) { mutableStateOf(profile.autoOffMinutes.toString()) }
-    var token by remember { mutableStateOf("") }
+    val canEdit = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
+    val gamePackages = remember(installedPackages) { installedPackages.filter { it.type == PackageType.GAME } }
+    val upgradeTargets = remember(profile.engineVersion) {
+        EngineCatalog.releases.filter { EngineCatalog.canUpgrade(profile.engineVersion, it.version) }
+    }
+    var name by remember(profile.id, profile.name) { mutableStateOf(profile.name) }
+    var engineVersion by remember(profile.id, profile.engineVersion) { mutableStateOf(profile.engineVersion) }
+    var gameKey by remember(profile.id, profile.gameKey) { mutableStateOf(profile.gameKey) }
+    var mapgen by remember(profile.id, profile.mapgen) { mutableStateOf(profile.mapgen) }
+    var maxPlayers by remember(profile.id, profile.maxPlayers) { mutableStateOf(profile.maxPlayers.toString()) }
+    var creative by remember(profile.id, profile.creative) { mutableStateOf(profile.creative) }
+    var damage by remember(profile.id, profile.damage) { mutableStateOf(profile.damage) }
+    var pvp by remember(profile.id, profile.pvp) { mutableStateOf(profile.pvp) }
+    var autoOffEnabled by remember(profile.id, profile.autoOffEnabled) { mutableStateOf(profile.autoOffEnabled) }
+    var autoOffMinutes by remember(profile.id, profile.autoOffMinutes) { mutableStateOf(profile.autoOffMinutes.toString()) }
+    var showVersions by remember { mutableStateOf(false) }
+    var showGames by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
-    val parsedMinutes = minutes.toIntOrNull()
+    val parsedPlayers = maxPlayers.toIntOrNull()
+    val parsedAutoOffMinutes = autoOffMinutes.toIntOrNull()
+    val selectedGameTitle = gamePackages.firstOrNull { it.packageKey == gameKey }?.title
+        ?: gameKey
+        ?: "No game selected"
+    val valid = name.isNotBlank() &&
+        mapgen.isNotBlank() &&
+        parsedPlayers != null &&
+        parsedPlayers in 1..100 &&
+        (!autoOffEnabled || (parsedAutoOffMinutes != null && parsedAutoOffMinutes in 1..1_440))
+
     LazyColumn(
         Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        item { Text("NovaX account", style = MaterialTheme.typography.headlineSmall) }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(if (account.tokenConfigured) "Token configured" else "No account token", style = MaterialTheme.typography.titleMedium)
-                    Text("Current tier: ${account.tier.name.lowercase().replaceFirstChar(Char::uppercase)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (account.expiresAt != null) Text("Expires: ${account.expiresAt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Temporary debug auth accepts dev:<uid>. Production will use Firebase ID tokens from Google/email sign-in.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        item { Text("Server settings", style = MaterialTheme.typography.headlineSmall) }
+        if (!canEdit) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Text(
+                        "Stop the server before changing its configuration.",
+                        Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
                 }
             }
         }
         item {
             OutlinedTextField(
-                value = token,
-                onValueChange = { token = it.take(160) },
-                label = { Text("NovaX token") },
-                placeholder = { Text("dev:tester") },
+                value = name,
+                onValueChange = { name = it.take(60) },
+                label = { Text("Server name") },
                 singleLine = true,
+                enabled = canEdit,
                 modifier = Modifier.fillMaxWidth(),
             )
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    onSaveAccountToken(token)
-                    message = if (token.isBlank()) "Account token cleared" else "Account token saved"
-                    token = ""
-                }, modifier = Modifier.weight(1f)) { Text("Save token") }
-                FilledTonalButton(onClick = {
-                    onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) }
-                }, enabled = account.tokenConfigured, modifier = Modifier.weight(1f)) { Text("Sync") }
-            }
+            FilledTonalButton(
+                onClick = { showVersions = true },
+                enabled = canEdit,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) { Text("Luanti engine: $engineVersion") }
         }
-        message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) } }
+        item {
+            FilledTonalButton(
+                onClick = { showGames = true },
+                enabled = canEdit && gamePackages.isNotEmpty(),
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) { Text("Game: $selectedGameTitle") }
+        }
+        if (gamePackages.isEmpty()) {
+            item { Text("Install a game from ContentDB or ZIP Import before selecting one here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        item {
+            OutlinedTextField(
+                value = mapgen,
+                onValueChange = { mapgen = it.take(32) },
+                label = { Text("Map generator") },
+                placeholder = { Text("v7") },
+                singleLine = true,
+                enabled = canEdit,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = maxPlayers,
+                onValueChange = { maxPlayers = it.filter(Char::isDigit).take(3) },
+                label = { Text("Max players") },
+                supportingText = { Text("1 to 100 players") },
+                singleLine = true,
+                enabled = canEdit,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item { Toggle("Creative mode", "Give creative inventory and fast building defaults", creative, canEdit) { creative = it } }
+        item { Toggle("Damage", "Players can take damage", damage, canEdit) { damage = it } }
+        item { Toggle("PvP", "Players can hurt each other", pvp, canEdit) { pvp = it } }
         item { HorizontalDivider(Modifier.padding(vertical = 6.dp)) }
         item { Text("Auto off", style = MaterialTheme.typography.headlineSmall) }
-        item { Toggle("Stop when nobody is connected", "Timer starts when the last player leaves", enabled) { enabled = it } }
+        item { Toggle("Stop when nobody is connected", "Optional timer. LAN has no mandatory idle stop.", autoOffEnabled, canEdit) { autoOffEnabled = it } }
         item {
             TextField(
-                value = minutes,
-                onValueChange = { minutes = it.filter(Char::isDigit).take(4) },
-                enabled = enabled,
+                value = autoOffMinutes,
+                onValueChange = { autoOffMinutes = it.filter(Char::isDigit).take(4) },
+                enabled = canEdit && autoOffEnabled,
                 label = { Text("Minutes with no players") },
                 supportingText = { Text("From 1 minute to 24 hours. Disabled by default.") },
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) } }
         item {
             Button(
-                onClick = { onSaveAutoOff(profile.id, enabled, parsedMinutes ?: profile.autoOffMinutes) },
-                enabled = !enabled || (parsedMinutes != null && parsedMinutes in 1..1_440),
+                onClick = {
+                    onSaveSettings(
+                        profile.id,
+                        name,
+                        engineVersion,
+                        gameKey,
+                        mapgen,
+                        parsedPlayers ?: profile.maxPlayers,
+                        creative,
+                        damage,
+                        pvp,
+                        autoOffEnabled,
+                        parsedAutoOffMinutes ?: profile.autoOffMinutes,
+                    ) { result -> message = result.fold({ it }, { it.message ?: "Save failed" }) }
+                },
+                enabled = canEdit && valid,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save auto off") }
+            ) { Text("Save server settings") }
         }
         item {
-            Text("LAN servers have no mandatory idle timeout. Free public tunnels still expire after four hours.")
+            Text("Engine changes are upgrade-only. Free public tunnels still expire after four hours.", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+
+    if (showVersions) {
+        AlertDialog(
+            onDismissRequest = { showVersions = false },
+            title = { Text("Select engine") },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(upgradeTargets.reversed()) { release ->
+                        TextButton(
+                            onClick = {
+                                engineVersion = release.version
+                                showVersions = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(if (release.version == profile.engineVersion) "${release.version} · current" else release.version)
+                                Text(
+                                    "Protocol ${release.protocolMin}-${release.protocolMax}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showVersions = false }) { Text("Close") } },
+        )
+    }
+
+    if (showGames) {
+        AlertDialog(
+            onDismissRequest = { showGames = false },
+            title = { Text("Select game") },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(gamePackages) { game ->
+                        TextButton(
+                            onClick = {
+                                gameKey = game.packageKey
+                                showGames = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(if (game.packageKey == profile.gameKey) "${game.title} · current" else game.title)
+                                Text(
+                                    "${game.source.name.lowercase()} · ${game.packageKey}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showGames = false }) { Text("Close") } },
+        )
     }
 }
 

@@ -59,6 +59,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { repository.updateAutoOff(profileId, enabled, minutes) }
     }
 
+    fun updateServerSettings(
+        profileId: String,
+        name: String,
+        engineVersion: String,
+        gameKey: String?,
+        mapgen: String,
+        maxPlayers: Int,
+        creative: Boolean,
+        damage: Boolean,
+        pvp: Boolean,
+        autoOffEnabled: Boolean,
+        autoOffMinutes: Int,
+        onResult: (Result<String>) -> Unit,
+    ) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                repository.updateServerSettings(
+                    id = profileId,
+                    name = name,
+                    engineVersion = engineVersion,
+                    gameKey = gameKey,
+                    mapgen = mapgen,
+                    maxPlayers = maxPlayers,
+                    creative = creative,
+                    damage = damage,
+                    pvp = pvp,
+                    autoOffEnabled = autoOffEnabled,
+                    autoOffMinutes = autoOffMinutes,
+                )
+                "Server settings saved"
+            })
+        }
+    }
+
     fun installedPackages(profileId: String) = repository.observePackages(profileId)
 
     fun importArchive(profileId: String, uri: Uri, kind: ImportKind, onResult: (Result<String>) -> Unit) {
