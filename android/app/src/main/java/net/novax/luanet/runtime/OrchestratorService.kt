@@ -1,5 +1,6 @@
 package net.novax.luanet.runtime
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -21,7 +22,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -43,6 +46,8 @@ class OrchestratorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val sessions = mutableMapOf<String, BoundEngine>()
     private val tunnels = mutableMapOf<String, BoundTunnel>()
+    private val logcatTails = mutableMapOf<String, Job>()
+    private val recentLogLines = mutableMapOf<String, Pair<String, Long>>()
     private val callback = Messenger(CallbackHandler())
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -212,6 +217,7 @@ class OrchestratorService : Service() {
                     putString(EngineProtocol.KEY_CONFIG, Json.encodeToString(configuration))
                     putString(EngineProtocol.KEY_PROFILE_ID, profileId)
                 }
+                startLogcatTail(profileId, slot)
                 updateNotification()
             }
             override fun onServiceDisconnected(name: ComponentName?) {
@@ -243,6 +249,7 @@ class OrchestratorService : Service() {
 
     private fun engineEnded(profileId: String, state: String) {
         stopPublicTunnel(profileId)
+        logcatTails.remove(profileId)?.cancel()
         val engine = sessions.remove(profileId)
         if (engine != null) runCatching { unbindService(engine.connection) }
         val serverState = runCatching { ServerState.valueOf(state) }.getOrDefault(ServerState.CRASHED)
@@ -337,16 +344,9 @@ class OrchestratorService : Service() {
                     if (state == "STOPPED" || state == "CRASHED") engineEnded(profileId, state)
                     else updateEngineState(profileId, state)
                 }
-                EngineProtocol.LOG -> appendLog(profileId, message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
-                EngineProtocol.PLAYER_JOIN -> RuntimeRegistry.update(profileId) { previous ->
-                    sessions[profileId]?.emptySince = null
-                    previous?.copy(players = previous.players + message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
-                }
-                EngineProtocol.PLAYER_LEAVE -> RuntimeRegistry.update(profileId) { previous ->
-                    val remaining = previous?.players.orEmpty() - message.data.getString(EngineProtocol.KEY_TEXT).orEmpty()
-                    if (remaining.isEmpty()) sessions[profileId]?.emptySince = System.currentTimeMillis()
-                    previous?.copy(players = remaining)
-                }
+                EngineProtocol.LOG -> recordEngineLine(profileId, message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
+                EngineProtocol.PLAYER_JOIN -> playerJoined(profileId, message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
+                EngineProtocol.PLAYER_LEAVE -> playerLeft(profileId, message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
             }
         }
     }
@@ -377,15 +377,111 @@ class OrchestratorService : Service() {
     }
 
     private fun appendLog(profileId: String, line: String) {
+        val normalized = line.trimEnd()
+        if (normalized.isBlank()) return
+        val now = System.currentTimeMillis()
+        val duplicate = recentLogLines[profileId]?.let { (previousLine, previousAt) ->
+            previousLine == normalized && now - previousAt < 800L
+        } == true
+        if (duplicate) return
+        recentLogLines[profileId] = normalized to now
         RuntimeRegistry.update(profileId) { previous ->
-            previous?.copy(logs = (previous.logs + line).takeLast(2_000)) ?: RuntimeSnapshot(
+            previous?.copy(logs = (previous.logs + normalized).takeLast(2_000)) ?: RuntimeSnapshot(
                 profileId = profileId,
                 state = "STARTING",
                 slot = sessions[profileId]?.slot ?: -1,
                 localPort = sessions[profileId]?.let { 30_000 + it.slot } ?: 0,
-                logs = listOf(line),
+                logs = listOf(normalized),
             )
         }
+    }
+
+    private fun recordEngineLine(profileId: String, rawLine: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { recordEngineLine(profileId, rawLine) }
+            return
+        }
+        val line = rawLine.stripAndroidLogPrefix().trimEnd()
+        appendLog(profileId, line)
+        if (line.contains("listening on", ignoreCase = true) || line.contains("Server for gameid", ignoreCase = true)) {
+            updateEngineState(profileId, "RUNNING")
+        }
+        line.playerNameBefore(" joins game")?.let { playerJoined(profileId, it) }
+        line.playerNameBefore(" leaves game")?.let { playerLeft(profileId, it) }
+        val players = line.substringAfter("List of players:", missingDelimiterValue = "")
+        if (players.isNotBlank()) {
+            players.split(',').map { it.trim() }.filter { it.isNotBlank() }.forEach { playerJoined(profileId, it) }
+        }
+    }
+
+    private fun playerJoined(profileId: String, rawName: String) {
+        val name = rawName.cleanPlayerName()
+        if (name.isBlank()) return
+        sessions[profileId]?.emptySince = null
+        RuntimeRegistry.update(profileId) { previous ->
+            previous?.copy(players = previous.players + name)
+        }
+    }
+
+    private fun playerLeft(profileId: String, rawName: String) {
+        val name = rawName.cleanPlayerName()
+        if (name.isBlank()) return
+        RuntimeRegistry.update(profileId) { previous ->
+            val remaining = previous?.players.orEmpty() - name
+            if (remaining.isEmpty()) sessions[profileId]?.emptySince = System.currentTimeMillis()
+            previous?.copy(players = remaining)
+        }
+    }
+
+    private fun startLogcatTail(profileId: String, slot: Int) {
+        logcatTails.remove(profileId)?.cancel()
+        logcatTails[profileId] = scope.launch {
+            val pid = waitForEnginePid(slot)
+            if (pid == null) {
+                recordEngineLine(profileId, "Logcat console tail unavailable: engine process :engine$slot was not visible.")
+                return@launch
+            }
+            val process = runCatching {
+                ProcessBuilder(
+                    "logcat",
+                    "-v", "time",
+                    "-T", "1",
+                    "--pid=$pid",
+                    "Luanti:I",
+                    "Minetest:I",
+                    "*:S",
+                ).redirectErrorStream(true).start()
+            }.getOrElse { error ->
+                recordEngineLine(profileId, "Logcat console tail unavailable: ${error.message ?: error.javaClass.simpleName}")
+                return@launch
+            }
+            currentCoroutineContext()[Job]?.invokeOnCompletion { process.destroy() }
+            runCatching {
+                process.inputStream.bufferedReader().use { reader ->
+                    while (currentCoroutineContext().isActive) {
+                        val line = reader.readLine() ?: break
+                        recordEngineLine(profileId, line)
+                    }
+                }
+            }
+            process.destroy()
+        }
+    }
+
+    private suspend fun waitForEnginePid(slot: Int): Int? {
+        repeat(40) {
+            enginePid(slot)?.let { return it }
+            delay(250)
+        }
+        return enginePid(slot)
+    }
+
+    private fun enginePid(slot: Int): Int? {
+        val expected = "$packageName:engine$slot"
+        return getSystemService(ActivityManager::class.java)
+            .runningAppProcesses
+            ?.firstOrNull { process -> process.processName == expected }
+            ?.pid
     }
 
     private fun writeConfig(file: File, name: String, port: Int, maxPlayers: Int, creative: Boolean, damage: Boolean, pvp: Boolean) {
@@ -556,3 +652,21 @@ class OrchestratorService : Service() {
         )
     }
 }
+
+private fun String.stripAndroidLogPrefix(): String {
+    val close = indexOf("): ")
+    return if (close >= 0) substring(close + 3) else this
+}
+
+private fun String.playerNameBefore(marker: String): String? {
+    val markerAt = indexOf(marker).takeIf { it >= 0 } ?: return null
+    val actionPrefix = lastIndexOf("]:", startIndex = markerAt)
+    val start = if (actionPrefix >= 0) actionPrefix + 2 else lastIndexOf(' ', startIndex = (markerAt - 1).coerceAtLeast(0)) + 1
+    return substring(start.coerceAtLeast(0), markerAt)
+        .substringBefore(" [")
+        .cleanPlayerName()
+        .takeIf { it.isNotBlank() }
+}
+
+private fun String.cleanPlayerName(): String =
+    trim().filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)

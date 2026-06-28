@@ -10,9 +10,12 @@
 
 #include <android/log.h>
 #include <atomic>
+#include <chrono>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -80,9 +83,15 @@ namespace {
 JavaVM *g_vm = nullptr;
 jobject g_bridge = nullptr;
 std::mutex g_mutex;
+std::mutex g_io_mutex;
+std::mutex g_log_line_mutex;
 std::atomic<bool> g_running{false};
+std::atomic<bool> g_log_tail_running{false};
+std::atomic<bool> g_announced_ready{false};
 int g_log_read = -1;
 int g_log_write = -1;
+int g_input_read = -1;
+int g_input_write = -1;
 
 std::string field(const std::string &json, const char *name)
 {
@@ -159,38 +168,142 @@ void ready()
 		g_vm->DetachCurrentThread();
 }
 
-void consume_logs()
+std::string trim_copy(const std::string &text)
+{
+	size_t start = 0;
+	while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start])))
+		++start;
+	size_t end = text.size();
+	while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])))
+		--end;
+	return text.substr(start, end - start);
+}
+
+std::string player_name_before(const std::string &line, size_t marker)
+{
+	size_t start = 0;
+	const auto action_prefix = line.rfind("]:", marker);
+	if (action_prefix != std::string::npos) {
+		start = action_prefix + 2;
+	} else {
+		const auto space = line.rfind(' ', marker > 0 ? marker - 1 : 0);
+		start = space == std::string::npos ? 0 : space + 1;
+	}
+	std::string name = trim_copy(line.substr(start, marker - start));
+	const auto address = name.find(" [");
+	if (address != std::string::npos)
+		name = trim_copy(name.substr(0, address));
+	return name;
+}
+
+bool write_all(int fd, const std::string &text)
+{
+	size_t written = 0;
+	while (written < text.size()) {
+		const ssize_t result = ::write(fd, text.data() + written, text.size() - written);
+		if (result <= 0)
+			return false;
+		written += static_cast<size_t>(result);
+	}
+	return true;
+}
+
+void handle_log_line(std::string line)
+{
+	while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+		line.pop_back();
+	if (line.empty())
+		return;
+	{
+		static std::string last_line;
+		static std::chrono::steady_clock::time_point last_at;
+		const auto now = std::chrono::steady_clock::now();
+		std::lock_guard<std::mutex> lock(g_log_line_mutex);
+		if (line == last_line && now - last_at < std::chrono::milliseconds(800))
+			return;
+		last_line = line;
+		last_at = now;
+	}
+	__android_log_print(ANDROID_LOG_INFO, "LuaNetEngine", "%s", line.c_str());
+	callback("emitLog", "(ILjava/lang/String;)V", line);
+	if ((line.find("listening on") != std::string::npos ||
+			line.find("Server for gameid") != std::string::npos)) {
+		bool expected = false;
+		if (g_announced_ready.compare_exchange_strong(expected, true))
+			ready();
+	}
+	auto joins = line.find(" joins game");
+	if (joins != std::string::npos) {
+		const std::string player = player_name_before(line, joins);
+		if (!player.empty())
+			callback("emitPlayerJoined", "(Ljava/lang/String;)V", player);
+	}
+	auto leaves = line.find(" leaves game");
+	if (leaves != std::string::npos) {
+		const std::string player = player_name_before(line, leaves);
+		if (!player.empty())
+			callback("emitPlayerLeft", "(Ljava/lang/String;)V", player);
+	}
+	const auto list = line.find("List of players:");
+	if (list != std::string::npos) {
+		std::string players = line.substr(list + std::strlen("List of players:"));
+		size_t cursor = 0;
+		while (cursor < players.size()) {
+			size_t comma = players.find(',', cursor);
+			std::string player = trim_copy(players.substr(cursor, comma == std::string::npos ? comma : comma - cursor));
+			if (!player.empty())
+				callback("emitPlayerJoined", "(Ljava/lang/String;)V", player);
+			if (comma == std::string::npos)
+				break;
+			cursor = comma + 1;
+		}
+	}
+}
+
+void consume_pipe_logs()
 {
 	FILE *stream = fdopen(g_log_read, "r");
 	if (!stream)
 		return;
 	char *buffer = nullptr;
 	size_t capacity = 0;
-	bool announced = false;
 	while (getline(&buffer, &capacity, stream) >= 0) {
-		std::string line(buffer);
-		while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
-			line.pop_back();
-		__android_log_print(ANDROID_LOG_INFO, "LuaNetEngine", "%s", line.c_str());
-		callback("emitLog", "(ILjava/lang/String;)V", line);
-		if (!announced && (line.find("listening on") != std::string::npos ||
-				line.find("Server for gameid") != std::string::npos)) {
-			announced = true;
-			ready();
-		}
-		auto joins = line.find(" joins game");
-		if (joins != std::string::npos) {
-			auto start = line.rfind(' ', joins > 0 ? joins - 1 : 0);
-			callback("emitPlayerJoined", "(Ljava/lang/String;)V", line.substr(start + 1, joins - start - 1));
-		}
-		auto leaves = line.find(" leaves game");
-		if (leaves != std::string::npos) {
-			auto start = line.rfind(' ', leaves > 0 ? leaves - 1 : 0);
-			callback("emitPlayerLeft", "(Ljava/lang/String;)V", line.substr(start + 1, leaves - start - 1));
-		}
+		handle_log_line(buffer);
 	}
 	free(buffer);
 	fclose(stream);
+}
+
+void drain_log_file(const std::string &path, std::streamoff &offset)
+{
+	std::ifstream input(path);
+	if (!input)
+		return;
+	input.seekg(0, std::ios::end);
+	const std::streamoff end = input.tellg();
+	if (end < 0)
+		return;
+	if (offset > end)
+		offset = 0;
+	input.seekg(offset, std::ios::beg);
+	std::string line;
+	while (std::getline(input, line))
+		handle_log_line(line);
+	input.clear();
+	input.seekg(0, std::ios::end);
+	const std::streamoff next = input.tellg();
+	if (next >= 0)
+		offset = next;
+}
+
+void tail_log_file(const std::string &path)
+{
+	std::streamoff offset = 0;
+	while (g_log_tail_running) {
+		drain_log_file(path, offset);
+		std::this_thread::sleep_for(std::chrono::milliseconds(250));
+	}
+	drain_log_file(path, offset);
 }
 
 void set_path(const char *modern, const char *legacy, const std::string &value)
@@ -224,25 +337,41 @@ Java_net_novax_luanet_runtime_NativeEngineBridge_run(JNIEnv *env, jobject instan
 	const std::string config = field(json, "configPath");
 	const std::string port = field(json, "localPort");
 	const std::string game = field(json, "gameId");
+	const std::string log = root + "/server.log";
 	set_path("LUANTI_USER_PATH", "MINETEST_USER_PATH", root);
 	set_path("LUANTI_GAME_PATH", "MINETEST_GAME_PATH", root + "/games");
 	set_path("LUANTI_MOD_PATH", "MINETEST_MOD_PATH", root + "/mods");
+	std::remove(log.c_str());
+	g_announced_ready = false;
 
-	int descriptors[2];
-	if (pipe(descriptors) != 0) {
+	int log_descriptors[2];
+	if (pipe(log_descriptors) != 0) {
 		g_running = false;
 		return 71;
 	}
-	g_log_read = descriptors[0];
-	g_log_write = descriptors[1];
+	int input_descriptors[2];
+	if (pipe(input_descriptors) != 0) {
+		close(log_descriptors[0]);
+		close(log_descriptors[1]);
+		g_running = false;
+		return 72;
+	}
+	g_log_read = log_descriptors[0];
+	g_log_write = log_descriptors[1];
+	g_input_read = input_descriptors[0];
+	g_input_write = input_descriptors[1];
+	const int old_in = dup(STDIN_FILENO);
 	const int old_out = dup(STDOUT_FILENO);
 	const int old_err = dup(STDERR_FILENO);
+	dup2(g_input_read, STDIN_FILENO);
 	dup2(g_log_write, STDOUT_FILENO);
 	dup2(g_log_write, STDERR_FILENO);
-	std::thread reader(consume_logs);
+	std::thread pipe_reader(consume_pipe_logs);
+	g_log_tail_running = true;
+	std::thread file_reader(tail_log_file, log);
 
 	std::vector<std::string> values{"luanetserver", "--world", world, "--config", config,
-		"--port", port, "--logfile", ""};
+		"--port", port, "--logfile", log};
 	if (!game.empty() && game != "null") {
 		values.emplace_back("--gameid");
 		values.emplace_back(game);
@@ -254,13 +383,25 @@ Java_net_novax_luanet_runtime_NativeEngineBridge_run(JNIEnv *env, jobject instan
 
 	fflush(stdout);
 	fflush(stderr);
+	g_log_tail_running = false;
+	if (file_reader.joinable())
+		file_reader.join();
+	dup2(old_in, STDIN_FILENO);
 	dup2(old_out, STDOUT_FILENO);
 	dup2(old_err, STDERR_FILENO);
+	close(old_in);
 	close(old_out);
 	close(old_err);
+	{
+		std::lock_guard<std::mutex> lock(g_io_mutex);
+		close(g_input_write);
+		g_input_write = -1;
+	}
+	close(g_input_read);
+	g_input_read = -1;
 	close(g_log_write);
 	g_log_write = -1;
-	reader.join();
+	pipe_reader.join();
 	{
 		std::lock_guard<std::mutex> lock(g_mutex);
 		env->DeleteGlobalRef(g_bridge);
@@ -281,7 +422,18 @@ JNIEXPORT void JNICALL
 Java_net_novax_luanet_runtime_NativeEngineBridge_submitCommand(JNIEnv *env, jobject, jstring command)
 {
 	const char *raw = env->GetStringUTFChars(command, nullptr);
-	callback("emitLog", "(ILjava/lang/String;)V",
-		std::string("Console command queued for LuaNet runtime mod: ") + (raw ? raw : ""), 1);
+	const std::string text = raw ? raw : "";
 	env->ReleaseStringUTFChars(command, raw);
+	if (text.empty())
+		return;
+	bool sent = false;
+	{
+		std::lock_guard<std::mutex> lock(g_io_mutex);
+		if (g_running && g_input_write >= 0)
+			sent = write_all(g_input_write, text + "\n");
+	}
+	if (!sent) {
+		callback("emitLog", "(ILjava/lang/String;)V",
+			std::string("Console command failed because Luanti stdin is not available: ") + text, 3);
+	}
 }
