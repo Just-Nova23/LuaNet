@@ -90,8 +90,8 @@ def main() -> None:
 // LuaNet vector2d hash: libc++ does not provide std::hash for Irrlicht vectors.
 namespace std {
 template <>
-struct hash<irr::core::vector2d<irr::s16>> {
-	size_t operator()(const irr::core::vector2d<irr::s16> &value) const noexcept
+struct hash<::v2s16> {
+	size_t operator()(const ::v2s16 &value) const noexcept
 	{
 		return static_cast<size_t>(value.X) ^
 				(static_cast<size_t>(value.Y) << 16);
@@ -115,8 +115,8 @@ struct hash<irr::core::vector2d<irr::s16>> {
 // LuaNet vector3d hash: libc++ does not provide std::hash for Irrlicht vectors.
 namespace std {
 template <>
-struct hash<irr::core::vector3d<irr::s16>> {
-	size_t operator()(const irr::core::vector3d<irr::s16> &value) const noexcept
+struct hash<::v3s16> {
+	size_t operator()(const ::v3s16 &value) const noexcept
 	{
 		return static_cast<size_t>(value.X) ^
 				(static_cast<size_t>(value.Y) << 16) ^
