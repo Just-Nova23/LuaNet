@@ -40,6 +40,10 @@ def main() -> None:
         "\t# LuaNet headless Android server provides porting_android replacements in the JNI bridge.",
     )
     text = text.replace(
+        "\tset(common_SRCS ${common_SRCS} porting_android.cpp)",
+        "\t# LuaNet headless Android server provides porting_android replacements in the JNI bridge.",
+    )
+    text = text.replace(
         "\tset(PLATFORM_LIBS -lpthread ${CMAKE_DL_LIBS})",
         "\tif(ANDROID)\n"
         "\t\tset(PLATFORM_LIBS ${CMAKE_DL_LIBS})\n"
