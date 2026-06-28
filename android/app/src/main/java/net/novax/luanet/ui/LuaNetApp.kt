@@ -855,7 +855,10 @@ private fun ContentPackageCard(
 private fun ContentThumbnail(url: String?, modifier: Modifier) {
     val shape = RoundedCornerShape(16.dp)
     val imageModifier = modifier.clip(shape).background(MaterialTheme.colorScheme.surface)
-    if (url.isNullOrBlank()) {
+    val candidates = remember(url) { contentImageCandidates(url) }
+    var imageIndex by remember(url) { mutableIntStateOf(0) }
+    val imageUrl = candidates.getOrNull(imageIndex)
+    if (imageUrl == null) {
         Box(
             imageModifier,
             contentAlignment = Alignment.Center,
@@ -864,10 +867,13 @@ private fun ContentThumbnail(url: String?, modifier: Modifier) {
         }
     } else {
         AsyncImage(
-            model = url,
+            model = imageUrl,
             contentDescription = null,
             modifier = imageModifier,
             contentScale = ContentScale.Crop,
+            onError = {
+                if (imageIndex < candidates.lastIndex) imageIndex += 1
+            },
         )
     }
 }
@@ -881,6 +887,23 @@ private fun ClickableContentImage(url: String?, modifier: Modifier, onOpen: (Str
             ContentThumbnail(url, Modifier.matchParentSize())
         }
     }
+}
+
+private fun contentImageCandidates(url: String?): List<String> {
+    val normalized = url?.trim()?.takeIf { it.isNotBlank() }?.let {
+        if (it.startsWith("//")) "https:$it" else it
+    } ?: return emptyList()
+    val clean = normalized.substringBefore('?')
+    val fileName = clean.substringAfterLast('/', "")
+    if ("/thumbnails/" !in clean || fileName.isBlank()) return listOf(normalized)
+    val stem = fileName.substringBeforeLast('.', fileName)
+    val uploadBase = "https://content.luanti.org/uploads/$stem"
+    return listOf(
+        "$uploadBase.png",
+        "$uploadBase.jpg",
+        "$uploadBase.jpeg",
+        normalized,
+    ).distinct()
 }
 
 @Composable
@@ -1057,6 +1080,8 @@ private fun MarkdownDescription(markdown: String, modifier: Modifier = Modifier)
 
 @Composable
 private fun ZoomableImageDialog(imageUrl: String, onDismiss: () -> Unit) {
+    val candidates = remember(imageUrl) { contentImageCandidates(imageUrl).ifEmpty { listOf(imageUrl) } }
+    var imageIndex by remember(imageUrl) { mutableIntStateOf(0) }
     var scale by remember(imageUrl) { mutableStateOf(1f) }
     var offsetX by remember(imageUrl) { mutableStateOf(0f) }
     var offsetY by remember(imageUrl) { mutableStateOf(0f) }
@@ -1067,8 +1092,9 @@ private fun ZoomableImageDialog(imageUrl: String, onDismiss: () -> Unit) {
             offsetX = 0f
             offsetY = 0f
         } else {
-            offsetX += panChange.x
-            offsetY += panChange.y
+            val panMultiplier = (scale * 1.75f).coerceIn(1.75f, 6f)
+            offsetX = (offsetX + panChange.x * panMultiplier).coerceIn(-6_000f, 6_000f)
+            offsetY = (offsetY + panChange.y * panMultiplier).coerceIn(-6_000f, 6_000f)
         }
     }
     Dialog(
@@ -1078,7 +1104,7 @@ private fun ZoomableImageDialog(imageUrl: String, onDismiss: () -> Unit) {
         Surface(color = Color.Black.copy(alpha = 0.96f), modifier = Modifier.fillMaxSize()) {
             Box(Modifier.fillMaxSize()) {
                 AsyncImage(
-                    model = imageUrl,
+                    model = candidates.getOrElse(imageIndex) { imageUrl },
                     contentDescription = null,
                     modifier = Modifier
                         .fillMaxSize()
@@ -1097,6 +1123,9 @@ private fun ZoomableImageDialog(imageUrl: String, onDismiss: () -> Unit) {
                             })
                         },
                     contentScale = ContentScale.Fit,
+                    onError = {
+                        if (imageIndex < candidates.lastIndex) imageIndex += 1
+                    },
                 )
                 FilledTonalButton(
                     onClick = onDismiss,
