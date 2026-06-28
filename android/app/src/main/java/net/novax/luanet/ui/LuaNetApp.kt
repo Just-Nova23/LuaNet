@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -706,6 +707,8 @@ private fun PlayersPanel(
     running: Boolean,
     onCommand: (String) -> Unit,
 ) {
+    val context = LocalContext.current
+    var selectedPlayer by remember { mutableStateOf<ServerPlayerEntity?>(null) }
     val merged = remember(players, runtimePlayers) {
         val byName = players.associateBy { it.name }.toMutableMap()
         runtimePlayers.forEach { name ->
@@ -718,45 +721,167 @@ private fun PlayersPanel(
     if (merged.isEmpty()) {
         EmptySection(Icons.Default.Group, "No players yet", "Players will stay listed here after they join once, even when the server is stopped.")
     } else {
-        LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            item {
+                Text("Players", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "Tap a player to open moderation and privilege actions. Offline players stay listed after they join once.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             items(merged) { player ->
                 val isOnline = player.online || player.name in runtimePlayers
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(shape = CircleShape, color = if (isOnline) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
-                                Text(player.name.take(1).uppercase(), Modifier.padding(horizontal = 13.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
-                            }
-                            Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text(player.name, style = MaterialTheme.typography.titleMedium)
-                                Text(
-                                    buildList {
-                                        add(if (isOnline) "Online" else "Offline")
-                                        if (player.admin) add("Admin")
-                                        if (player.banned) add("Banned")
-                                    }.joinToString(" · "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                Card(
+                    modifier = Modifier.fillMaxWidth().clickable { selectedPlayer = player },
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+                ) {
+                    Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(shape = CircleShape, color = if (isOnline) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
+                            Text(player.name.take(1).uppercase(), Modifier.padding(horizontal = 13.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            val safe = player.name.safePlayerName()
-                            FilledTonalButton(enabled = running && isOnline, onClick = { onCommand("/kick $safe") }) { Text("Kick") }
-                            FilledTonalButton(enabled = running && !player.banned, onClick = { onCommand("/ban $safe") }) { Text("Ban") }
-                            FilledTonalButton(enabled = running && player.banned, onClick = { onCommand("/unban $safe") }) { Text("Unban") }
-                            TextButton(enabled = running && !player.admin, onClick = { onCommand("/grant $safe all") }) { Text("Make admin") }
-                            TextButton(enabled = running && player.admin, onClick = { onCommand("/revoke $safe all") }) { Text("Remove admin") }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(player.name, style = MaterialTheme.typography.titleMedium)
+                            Text(
+                                buildList {
+                                    add(if (isOnline) "Online" else "Offline")
+                                    if (player.admin) add("Admin")
+                                    if (player.banned) add("Banned")
+                                }.joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
+                        Text("Actions", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge)
                     }
                 }
             }
         }
     }
+    selectedPlayer?.let { player ->
+        PlayerActionsDialog(
+            player = player,
+            isOnline = player.online || player.name in runtimePlayers,
+            running = running,
+            onDismiss = { selectedPlayer = null },
+            onCopyName = { copy(context, player.name) },
+            onCommand = onCommand,
+        )
+    }
+}
+
+@Composable
+private fun PlayerActionsDialog(
+    player: ServerPlayerEntity,
+    isOnline: Boolean,
+    running: Boolean,
+    onDismiss: () -> Unit,
+    onCopyName: () -> Unit,
+    onCommand: (String) -> Unit,
+) {
+    val safe = player.name.safePlayerName()
+    var kickReason by remember(player.name) { mutableStateOf("") }
+    var customPrivilege by remember(player.name) { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(player.name) },
+        text = {
+            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                item {
+                    Text(
+                        buildList {
+                            add(if (isOnline) "Online" else "Offline")
+                            if (player.admin) add("Admin")
+                            if (player.banned) add("Banned")
+                            add(if (running) "Server running" else "Server stopped")
+                        }.joinToString(" · "),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                item {
+                    OutlinedTextField(
+                        value = kickReason,
+                        onValueChange = { kickReason = it.replace("\n", " ").take(120) },
+                        label = { Text("Kick reason") },
+                        placeholder = { Text("Optional") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerActionButton("Kick", running && isOnline && safe.isNotBlank()) { onCommand("/kick $safe") }
+                        PlayerActionButton("Kick with reason", running && isOnline && safe.isNotBlank() && kickReason.isNotBlank()) {
+                            onCommand("/kick $safe ${kickReason.trim()}")
+                        }
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerActionButton("Ban", running && safe.isNotBlank() && !player.banned) { onCommand("/ban $safe") }
+                        PlayerActionButton("Unban", running && safe.isNotBlank()) { onCommand("/unban $safe") }
+                    }
+                }
+                item { HorizontalDivider() }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerActionButton("Make admin", running && safe.isNotBlank() && !player.admin) { onCommand("/grant $safe all") }
+                        PlayerActionButton("Remove admin", running && safe.isNotBlank() && player.admin) { onCommand("/revoke $safe all") }
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerActionButton("Grant interact", running && safe.isNotBlank()) { onCommand("/grant $safe interact") }
+                        PlayerActionButton("Revoke interact", running && safe.isNotBlank()) { onCommand("/revoke $safe interact") }
+                    }
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerActionButton("Grant shout", running && safe.isNotBlank()) { onCommand("/grant $safe shout") }
+                        PlayerActionButton("Revoke shout", running && safe.isNotBlank()) { onCommand("/revoke $safe shout") }
+                    }
+                }
+                item {
+                    OutlinedTextField(
+                        value = customPrivilege,
+                        onValueChange = { customPrivilege = it.safePrivilegeName() },
+                        label = { Text("Custom privilege") },
+                        placeholder = { Text("fly, fast, teleport...") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerActionButton("Grant custom", running && safe.isNotBlank() && customPrivilege.isNotBlank()) {
+                            onCommand("/grant $safe ${customPrivilege.trim()}")
+                        }
+                        PlayerActionButton("Revoke custom", running && safe.isNotBlank() && customPrivilege.isNotBlank()) {
+                            onCommand("/revoke $safe ${customPrivilege.trim()}")
+                        }
+                    }
+                }
+                item { HorizontalDivider() }
+                item {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayerActionButton("Show privileges", running && safe.isNotBlank()) { onCommand("/privs $safe") }
+                        PlayerActionButton("Copy name", true) { onCopyName() }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+    )
+}
+
+@Composable
+private fun RowScope.PlayerActionButton(label: String, enabled: Boolean, onClick: () -> Unit) {
+    FilledTonalButton(modifier = Modifier.weight(1f), enabled = enabled, onClick = onClick) { Text(label) }
 }
 
 private fun String.safePlayerName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)
+private fun String.safePrivilegeName(): String = filter { it.isLetterOrDigit() || it == '_' }.take(32)
 
 @Composable
 private fun EmptySection(icon: ImageVector, title: String, detail: String) {

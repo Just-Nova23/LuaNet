@@ -91,8 +91,8 @@ def main() -> None:
         luanet_server = (
             "\t\tChatInterface luanet_iface;\n"
             "\t\tstd::string luanet_admin_nick = g_settings->get(\"name\");\n"
-            "\t\tif (!is_valid_player_name(luanet_admin_nick))\n"
-            "\t\t\tluanet_admin_nick = \"LuaNet\";\n"
+            "\t\tif (luanet_admin_nick.empty())\n"
+            "\t\t\tluanet_admin_nick = \"LuaNetAdmin\";\n"
             "\t\ttry {\n"
             "\t\t\t// Create server\n"
             "\t\t\tServer server(game_params.world_path, game_params.game_spec, false,\n"
@@ -120,8 +120,8 @@ def main() -> None:
         legacy_luanet_server = (
             "\t\tChatInterface luanet_iface;\n"
             "\t\tstd::string luanet_admin_nick = g_settings->get(\"name\");\n"
-            "\t\tif (!is_valid_player_name(luanet_admin_nick))\n"
-            "\t\t\tluanet_admin_nick = \"LuaNet\";\n"
+            "\t\tif (luanet_admin_nick.empty())\n"
+            "\t\t\tluanet_admin_nick = \"LuaNetAdmin\";\n"
             "\t\ttry {\n"
             "\t\t\t// Create server\n"
             "\t\t\tServer server(game_params.world_path, game_params.game_spec, false,\n"

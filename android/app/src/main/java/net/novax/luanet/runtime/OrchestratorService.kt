@@ -119,14 +119,17 @@ class OrchestratorService : Service() {
         }
         val world = File(root, "world").apply { mkdirs() }
         val packages = repository.packages(profile.id)
+        val consoleAdmin = "ln_admin_${profile.id.take(8).filter { it.isLetterOrDigit() }}"
+        val consolePassword = profile.id.replace("-", "").take(32).ifBlank { "luanet" }
+        writeLuaNetRuntimeMod(File(root, "mods"), consoleAdmin, consolePassword)
         writeWorldConfig(world, profile.gameKey, packages, File(root, "mods"))
         val config = File(root, "minetest.conf")
         val customSettings = repository.configSettings(profile.id).associate { it.key to it.value }
-        writeConfig(config, profile, port, customSettings)
+        writeConfig(config, profile, port, consoleAdmin, consolePassword, customSettings)
         val engineConfiguration = EngineConfiguration(
             profile.id, profile.engineVersion, release.libraryName, root.absolutePath,
             world.absolutePath, config.absolutePath, port, profile.gameKey?.substringAfter('/'),
-            "__luanet_console_${profile.id.take(8)}",
+            consoleAdmin,
         )
         repository.updateRuntime(profile.id, ServerState.STARTING, port)
         repository.markAllPlayersOffline(profile.id)
@@ -509,11 +512,21 @@ class OrchestratorService : Service() {
         }
     }
 
-    private fun writeConfig(file: File, profile: net.novax.luanet.data.db.ServerProfileEntity, port: Int, customSettings: Map<String, String>) {
+    private fun writeConfig(
+        file: File,
+        profile: net.novax.luanet.data.db.ServerProfileEntity,
+        port: Int,
+        consoleAdmin: String,
+        consolePassword: String,
+        customSettings: Map<String, String>,
+    ) {
         val stepSeconds = (profile.dedicatedServerStepMs.coerceIn(20, 1_000) / 1000.0)
         val lines = mutableListOf(
             "port = $port",
             "bind_address = 0.0.0.0",
+            "name = $consoleAdmin",
+            "default_password = $consolePassword",
+            "luanet_console_password = $consolePassword",
             "server_name = ${profile.name.singleLine()}",
             "server_description = ${profile.serverDescription.singleLine()}",
             "motd = ${profile.motd.singleLine()}",
@@ -539,10 +552,55 @@ class OrchestratorService : Service() {
             "secure.trusted_mods =",
             "secure.http_mods =",
         )
+        val protectedKeys = setOf("name", "default_password", "luanet_console_password", "secure.enable_security", "secure.trusted_mods")
         customSettings.toSortedMap().forEach { (key, value) ->
-            if (key.matches(Regex("[A-Za-z0-9_.:-]{1,120}"))) lines += "$key = ${value.replace("\n", " ").take(512)}"
+            if (key !in protectedKeys && key.matches(Regex("[A-Za-z0-9_.:-]{1,120}"))) lines += "$key = ${value.replace("\n", " ").take(512)}"
         }
         file.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
+    }
+
+    private fun writeLuaNetRuntimeMod(modsRoot: File, consoleAdmin: String, consolePassword: String) {
+        val runtime = File(modsRoot, "luanet_runtime").apply { mkdirs() }
+        File(runtime, "mod.conf").writeText(
+            """
+            name = luanet_runtime
+            description = Internal LuaNet server bootstrap
+            depends =
+            """.trimIndent() + "\n",
+        )
+        File(runtime, "init.lua").writeText(
+            """
+            local admin = minetest.settings:get("name") or "$consoleAdmin"
+            local password = minetest.settings:get("luanet_console_password") or "$consolePassword"
+
+            local function sync_console_admin()
+                if admin == "" then
+                    return
+                end
+
+                local privs = {}
+                for name, def in pairs(minetest.registered_privileges or {}) do
+                    if def.give_to_admin then
+                        privs[name] = true
+                    end
+                end
+                minetest.set_player_privs(admin, privs)
+
+                local auth = minetest.get_auth_handler and minetest.get_auth_handler()
+                if auth and auth.set_password and minetest.get_password_hash then
+                    auth.set_password(admin, minetest.get_password_hash(admin, password))
+                end
+
+                minetest.log("action", "[LuaNet] Console admin ready: " .. admin)
+            end
+
+            if minetest.after then
+                minetest.after(0, sync_console_admin)
+            else
+                sync_console_admin()
+            end
+            """.trimIndent() + "\n",
+        )
     }
 
     private fun writeWorldConfig(world: File, gameKey: String?, packages: List<InstalledPackageEntity>, modsRoot: File) {
@@ -559,6 +617,7 @@ class OrchestratorService : Service() {
         preserved["backend"] = preserved["backend"] ?: "sqlite3"
         gameKey?.substringAfter('/')?.takeIf { it.isNotBlank() }?.let { preserved["gameid"] = it }
         preserved.keys.filter { it.startsWith("load_mod_") }.toList().forEach { preserved.remove(it) }
+        preserved["load_mod_luanet_runtime"] = "true"
         enabledModNames(packages, modsRoot).forEach { modName ->
             preserved["load_mod_$modName"] = "true"
         }

@@ -96,7 +96,7 @@ int g_log_write = -1;
 int g_input_read = -1;
 int g_input_write = -1;
 ChatInterface *g_admin_chat = nullptr;
-std::string g_admin_nick = "LuaNet";
+std::string g_admin_nick = "LuaNetAdmin";
 
 std::string field(const std::string &json, const char *name)
 {
@@ -301,14 +301,40 @@ void drain_log_file(const std::string &path, std::streamoff &offset)
 		offset = next;
 }
 
+void drain_admin_chat_events()
+{
+	std::vector<std::string> lines;
+	{
+		std::lock_guard<std::mutex> lock(g_chat_mutex);
+		if (!g_admin_chat)
+			return;
+		while (!g_admin_chat->outgoing_queue.empty()) {
+			ChatEvent *evt = g_admin_chat->outgoing_queue.pop_frontNoEx();
+			if (!evt)
+				continue;
+			if (evt->type == CET_CHAT) {
+				auto *chat = static_cast<ChatEventChat *>(evt);
+				const std::string text = wide_to_utf8(chat->evt_msg);
+				if (!text.empty())
+					lines.push_back("Console: " + text);
+			}
+			delete evt;
+		}
+	}
+	for (const auto &line : lines)
+		callback("emitLog", "(ILjava/lang/String;)V", line, 1);
+}
+
 void tail_log_file(const std::string &path)
 {
 	std::streamoff offset = 0;
 	while (g_log_tail_running) {
 		drain_log_file(path, offset);
+		drain_admin_chat_events();
 		std::this_thread::sleep_for(std::chrono::milliseconds(250));
 	}
 	drain_log_file(path, offset);
+	drain_admin_chat_events();
 }
 
 void set_path(const char *modern, const char *legacy, const std::string &value)
@@ -322,7 +348,7 @@ extern "C" void luanet_set_admin_chat_interface(ChatInterface *iface, const char
 {
 	std::lock_guard<std::mutex> lock(g_chat_mutex);
 	g_admin_chat = iface;
-	g_admin_nick = nick && *nick ? nick : "LuaNet";
+	g_admin_nick = nick && *nick ? nick : "LuaNetAdmin";
 	if (g_admin_chat)
 		g_admin_chat->command_queue.push_back(new ChatEventNick(CET_NICK_ADD, g_admin_nick));
 }
