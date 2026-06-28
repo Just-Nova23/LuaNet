@@ -155,8 +155,24 @@ def main() -> None:
                 main,
                 count=1,
             )
+        if "luanet_set_admin_chat_interface(&luanet_iface" not in main and "g_term_console.setup(&iface, &kill, admin_nick);" in main:
+            main = main.replace(
+                "\t\t\tg_term_console.setup(&iface, &kill, admin_nick);\n\n"
+                "\t\t\tg_term_console.start();",
+                "\t\t\tg_term_console.setup(&iface, &kill, admin_nick);\n"
+                "\t\t\tluanet_set_admin_chat_interface(&iface, admin_nick.c_str());\n\n"
+                "\t\t\tg_term_console.start();",
+                1,
+            )
+            main = main.replace(
+                "\n\t\t// Tell the console to stop, and wait for it to finish,",
+                "\n\t\tluanet_clear_admin_chat_interface(&iface);\n\n"
+                "\t\t// Tell the console to stop, and wait for it to finish,",
+                1,
+            )
         if "luanet_set_admin_chat_interface(&luanet_iface" not in main:
-            raise SystemExit("Unsupported Luanti dedicated server loop layout")
+            if "luanet_set_admin_chat_interface(&iface" not in main:
+                raise SystemExit("Unsupported Luanti dedicated server loop layout")
         main_cpp.write_text(main)
 
     if android_header.exists():
