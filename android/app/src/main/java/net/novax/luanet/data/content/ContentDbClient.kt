@@ -30,7 +30,23 @@ data class ContentPackage(
 }
 
 @Serializable
-private data class ContentPackageDetail(
+data class ContentPackageDetail(
+    val author: String = "",
+    val name: String = "",
+    val title: String = "",
+    val type: String = "",
+    val release: Long? = null,
+    @SerialName("short_description") val shortDescription: String = "",
+    @SerialName("long_description") val longDescription: String = "",
+    val thumbnail: String? = null,
+    val screenshots: List<String> = emptyList(),
+    val downloads: Long? = null,
+    val tags: List<String> = emptyList(),
+    val repo: String? = null,
+    val website: String? = null,
+    @SerialName("forum_url") val forumUrl: String? = null,
+    @SerialName("issue_tracker") val issueTracker: String? = null,
+    val url: String? = null,
     val state: String? = null,
     @SerialName("dev_state") val devState: String? = null,
     @SerialName("content_warnings") val contentWarnings: List<String> = emptyList(),
@@ -59,6 +75,7 @@ private data class ContentPackageDetail(
 
 data class ContentDependency(val name: String, val candidates: List<String>)
 data class DownloadProgress(val bytesRead: Long, val totalBytes: Long?)
+data class ContentHomeSection(val title: String, val subtitle: String, val items: List<ContentPackage>)
 
 class ContentDbClient(
     private val http: OkHttpClient = OkHttpClient(),
@@ -67,10 +84,40 @@ class ContentDbClient(
 ) {
     suspend fun search(type: String, query: String, engineVersion: String, game: String? = null): List<ContentPackage> {
         val apiType = apiType(type)
-        val all = packageQuery(apiType, query, null, game)
-        val supported = packageQuery(apiType, query, engineVersion, game).mapTo(hashSetOf()) { it.key }
-        val visible = all.map { it.copy(compatible = it.key in supported) }
-        return enrichBadges(visible.take(MAX_BADGED_RESULTS)) + visible.drop(MAX_BADGED_RESULTS)
+        return queryPackages(apiType, query, "score", "desc", 100, engineVersion, game)
+    }
+
+    suspend fun home(engineVersion: String, game: String? = null): List<ContentHomeSection> = coroutineScope {
+        listOf(
+            async {
+                ContentHomeSection(
+                    title = "Top games",
+                    subtitle = "Most trusted game packages on ContentDB",
+                    items = queryPackages("game", "", "score", "desc", HOME_SECTION_LIMIT, engineVersion, null),
+                )
+            },
+            async {
+                ContentHomeSection(
+                    title = "Recently updated games",
+                    subtitle = "Fresh game releases and updates",
+                    items = queryPackages("game", "", "last_release", "desc", HOME_SECTION_LIMIT, engineVersion, null),
+                )
+            },
+            async {
+                ContentHomeSection(
+                    title = if (game == null) "Top mods" else "Top compatible mods",
+                    subtitle = if (game == null) "Popular mods across ContentDB" else "Popular mods for the selected game",
+                    items = queryPackages("mod", "", "score", "desc", HOME_SECTION_LIMIT, engineVersion, game),
+                )
+            },
+            async {
+                ContentHomeSection(
+                    title = "Recently updated mods",
+                    subtitle = "Latest mod and modpack releases",
+                    items = queryPackages("mod", "", "last_release", "desc", HOME_SECTION_LIMIT, engineVersion, game),
+                )
+            },
+        ).awaitAll().filter { it.items.isNotEmpty() }
     }
 
     suspend fun hardDependencies(packageKey: String): List<ContentDependency> {
@@ -97,16 +144,14 @@ class ContentDbClient(
         return json.decodeFromString(get(url))
     }
 
-    private suspend fun detail(packageKey: String): ContentPackageDetail {
+    suspend fun details(packageKey: String): ContentPackageDetail {
         require(packageKey.count { it == '/' } == 1) { "Invalid ContentDB package key" }
         val url = baseUrl.newBuilder().addPathSegments("api/packages/$packageKey/").build()
         return json.decodeFromString(get(url))
     }
 
     fun downloadUrl(item: ContentPackage): HttpUrl {
-        val builder = baseUrl.newBuilder().addPathSegments("packages/${item.author}/${item.name}/")
-        if (item.release != null) builder.addPathSegments("releases/${item.release}/")
-        return builder.addPathSegment("download").build()
+        return baseUrl.newBuilder().addPathSegments("packages/${item.author}/${item.name}/download/").build()
     }
 
     suspend fun download(
@@ -138,13 +183,38 @@ class ContentDbClient(
         }
     }
 
-    private suspend fun packageQuery(type: String, query: String, engineVersion: String?, game: String?): List<ContentPackage> {
+    private suspend fun queryPackages(
+        type: String,
+        query: String,
+        sort: String,
+        order: String,
+        limit: Int,
+        engineVersion: String?,
+        game: String?,
+    ): List<ContentPackage> {
+        val all = packageQuery(type, query, null, game, sort, order, limit)
+        val supported = packageQuery(type, query, engineVersion, game, sort, order, limit).mapTo(hashSetOf()) { it.key }
+        val visible = all.map { it.copy(compatible = it.key in supported) }
+        return enrichBadges(visible.take(MAX_BADGED_RESULTS)) + visible.drop(MAX_BADGED_RESULTS)
+    }
+
+    private suspend fun packageQuery(
+        type: String,
+        query: String,
+        engineVersion: String?,
+        game: String?,
+        sort: String,
+        order: String,
+        limit: Int,
+    ): List<ContentPackage> {
         val url = baseUrl.newBuilder().addPathSegments("api/packages/")
             .addQueryParameter("type", type)
-            .addQueryParameter("q", query)
             .addQueryParameter("fmt", "short")
-            .addQueryParameter("limit", "100")
+            .addQueryParameter("limit", limit.toString())
+            .addQueryParameter("sort", sort)
+            .addQueryParameter("order", order)
             .apply {
+                if (query.isNotBlank()) addQueryParameter("q", query.trim())
                 if (engineVersion != null) addQueryParameter("engine_version", engineVersion)
                 if (game != null) addQueryParameter("game", game)
             }.build()
@@ -161,7 +231,7 @@ class ContentDbClient(
     private suspend fun enrichBadges(items: List<ContentPackage>): List<ContentPackage> = coroutineScope {
         items.map { item ->
             async {
-                runCatching { item.copy(badges = detail(item.key).badges()) }.getOrDefault(item)
+                runCatching { item.copy(badges = details(item.key).badges()) }.getOrDefault(item)
             }
         }.awaitAll()
     }
@@ -177,5 +247,6 @@ class ContentDbClient(
     companion object {
         private const val MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024
         private const val MAX_BADGED_RESULTS = 40
+        private const val HOME_SECTION_LIMIT = 20
     }
 }

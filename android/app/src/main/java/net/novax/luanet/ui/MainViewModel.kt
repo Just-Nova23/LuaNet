@@ -16,7 +16,9 @@ import net.novax.luanet.data.ArchiveCopyProgress
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.SubscriptionTier
 import net.novax.luanet.data.importer.ImportKind
+import net.novax.luanet.data.content.ContentHomeSection
 import net.novax.luanet.data.content.ContentPackage
+import net.novax.luanet.data.content.ContentPackageDetail
 import net.novax.luanet.data.content.DownloadProgress
 import net.novax.luanet.runtime.EntitlementStore
 import net.novax.luanet.runtime.OrchestratorService
@@ -30,6 +32,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val profiles = repository.profiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val _content = MutableStateFlow(ContentBrowserState())
     val content: StateFlow<ContentBrowserState> = _content.asStateFlow()
+    private val _contentDetails = MutableStateFlow<Map<String, ContentDetailState>>(emptyMap())
+    val contentDetails: StateFlow<Map<String, ContentDetailState>> = _contentDetails.asStateFlow()
     private val _account = MutableStateFlow(AccountState(
         tokenConfigured = container.authTokens.bearerToken() != null,
         tier = entitlementStore.current(),
@@ -131,6 +135,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun searchContent(profileId: String, type: String, query: String) {
         val profile = profiles.value.firstOrNull { it.id == profileId } ?: return
+        if (query.isBlank()) {
+            loadContentHome(profileId)
+            return
+        }
         _content.value = ContentBrowserState(
             profileId = profileId,
             type = type,
@@ -154,6 +162,49 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     operation = _content.value.operation,
                 )
             }
+        }
+    }
+
+    fun loadContentHome(profileId: String) {
+        val profile = profiles.value.firstOrNull { it.id == profileId } ?: return
+        _content.value = ContentBrowserState(
+            profileId = profileId,
+            type = _content.value.type,
+            query = "",
+            loading = true,
+            operation = _content.value.operation,
+        )
+        viewModelScope.launch {
+            _content.value = runCatching {
+                ContentBrowserState(
+                    profileId = profileId,
+                    query = "",
+                    sections = container.contentDb.home(profile.engineVersion, profile.gameKey),
+                    loading = false,
+                    operation = _content.value.operation,
+                )
+            }.getOrElse {
+                ContentBrowserState(
+                    profileId = profileId,
+                    query = "",
+                    error = it.message ?: "ContentDB request failed",
+                    operation = _content.value.operation,
+                )
+            }
+        }
+    }
+
+    fun loadContentDetail(packageKey: String) {
+        val current = _contentDetails.value[packageKey]
+        if (current?.loading == true || current?.detail != null) return
+        _contentDetails.update { it + (packageKey to ContentDetailState(loading = true)) }
+        viewModelScope.launch {
+            val state = runCatching {
+                ContentDetailState(detail = container.contentDb.details(packageKey))
+            }.getOrElse {
+                ContentDetailState(error = it.message ?: "ContentDB detail request failed")
+            }
+            _contentDetails.update { it + (packageKey to state) }
         }
     }
 
@@ -272,9 +323,16 @@ data class ContentBrowserState(
     val type: String = "game",
     val query: String = "",
     val items: List<ContentPackage> = emptyList(),
+    val sections: List<ContentHomeSection> = emptyList(),
     val loading: Boolean = false,
     val error: String? = null,
     val operation: ContentOperationState? = null,
+)
+
+data class ContentDetailState(
+    val loading: Boolean = false,
+    val detail: ContentPackageDetail? = null,
+    val error: String? = null,
 )
 
 data class ContentOperationState(

@@ -41,8 +41,21 @@ class ContentDbClientTest {
         server.enqueue(MockResponse().setBody("[]"))
         server.enqueue(MockResponse().setBody("[]"))
         client().search("modpack", "technic", "5.16.1")
-        assertEquals("/api/packages/?type=mod&q=technic&fmt=short&limit=100", server.takeRequest().path)
-        assertEquals("/api/packages/?type=mod&q=technic&fmt=short&limit=100&engine_version=5.16.1", server.takeRequest().path)
+        assertEquals("/api/packages/?type=mod&fmt=short&limit=100&sort=score&order=desc&q=technic", server.takeRequest().path)
+        assertEquals("/api/packages/?type=mod&fmt=short&limit=100&sort=score&order=desc&q=technic&engine_version=5.16.1", server.takeRequest().path)
+    }
+
+    @Test fun homeLoadsFeaturedSectionsWithoutSearchText() = runTest {
+        repeat(8) { server.enqueue(MockResponse().setBody("[]")) }
+        val sections = client().home("5.16.1", "Luanti/minetest_game")
+        val paths = (0 until 8).map { server.takeRequest().path.orEmpty() }
+
+        assertTrue(sections.isEmpty())
+        assertTrue(paths.any { it.contains("type=game") && it.contains("sort=score") })
+        assertTrue(paths.any { it.contains("type=game") && it.contains("sort=last_release") })
+        assertTrue(paths.any { it.contains("type=mod") && it.contains("sort=score") && it.contains("game=Luanti%2Fminetest_game") })
+        assertTrue(paths.any { it.contains("type=mod") && it.contains("sort=last_release") && it.contains("game=Luanti%2Fminetest_game") })
+        assertTrue(paths.any { it.contains("engine_version=5.16.1") })
     }
 
     @Test fun searchAddsVisibleRiskBadgesFromPackageDetails() = runTest {
@@ -68,6 +81,7 @@ class ContentDbClientTest {
             assertTrue(progress.isNotEmpty())
             assertEquals(10L, progress.last().bytesRead)
             assertEquals(10L, progress.last().totalBytes)
+            assertEquals("/packages/alice/mod/download/", server.takeRequest().path)
         } finally {
             temp.delete()
         }
