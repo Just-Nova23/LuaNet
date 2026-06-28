@@ -1,0 +1,13 @@
+LuaNet bundles Luanti `builtin/` Lua runtime assets for each supported engine
+version so the Android headless server can start without downloading executable
+code at runtime.
+
+Source archives:
+https://github.com/luanti-org/luanti/archive/refs/tags/<version>.tar.gz
+
+Historical fallback source:
+https://github.com/minetest/minetest/archive/refs/tags/<version>.tar.gz
+
+These runtime assets follow the upstream Luanti/Minetest licensing terms. LuaNet
+keeps them versioned as compressed `builtin.zip` assets and extracts them into a
+server profile before starting the corresponding bundled native engine.

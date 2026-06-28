@@ -37,6 +37,7 @@ import net.novax.luanet.network.TunnelLease
 import java.io.File
 import java.time.Instant
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 
 class OrchestratorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -105,6 +106,12 @@ class OrchestratorService : Service() {
             return
         }
         val root = repository.profileDirectory(profile.id).apply { mkdirs() }
+        runCatching { ensureRuntimeAssets(root, profile.engineVersion) }.onFailure { error ->
+            val text = "Engine ${profile.engineVersion} runtime assets are missing or invalid: ${error.message}"
+            repository.updateRuntime(profileId, ServerState.CRASHED, null)
+            RuntimeRegistry.update(profileId) { RuntimeSnapshot(profileId, "CRASHED", -1, 0, logs = listOf(text)) }
+            return
+        }
         val world = File(root, "world").apply { mkdirs() }
         val packages = repository.packages(profile.id)
         writeWorldConfig(world, profile.gameKey, packages, File(root, "mods"))
@@ -134,6 +141,54 @@ class OrchestratorService : Service() {
                     }
                 }
             }.getOrDefault(false)
+        }
+    }
+
+    private fun ensureRuntimeAssets(root: File, engineVersion: String) {
+        val marker = File(root, ".luanet-runtime-version")
+        val builtinInit = File(root, "builtin/init.lua")
+        val installedVersion = runCatching { marker.readText().trim() }.getOrNull()
+        if (builtinInit.isFile && installedVersion == engineVersion) return
+        File(root, "builtin").deleteRecursively()
+        extractRuntimeAsset(root, "engine-runtime/$engineVersion/builtin.zip")
+        require(builtinInit.isFile) { "builtin/init.lua was not installed" }
+        marker.writeText(engineVersion)
+    }
+
+    private fun extractRuntimeAsset(root: File, assetPath: String) {
+        val canonicalRoot = root.canonicalFile
+        var totalBytes = 0L
+        assets.open(assetPath).use { input ->
+            ZipInputStream(input).use { zip ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    val name = entry.name.replace('\\', '/')
+                    val parts = name.split('/').filter { it.isNotBlank() }
+                    require(parts.isNotEmpty() && parts.first() == "builtin" && parts.none { it == ".." }) {
+                        "Unsafe runtime asset entry: ${entry.name}"
+                    }
+                    val target = File(root, name).canonicalFile
+                    require(target.path.startsWith(canonicalRoot.path + File.separator)) {
+                        "Runtime asset escapes profile directory: ${entry.name}"
+                    }
+                    if (entry.isDirectory) {
+                        target.mkdirs()
+                    } else {
+                        target.parentFile?.mkdirs()
+                        target.outputStream().use { output ->
+                            while (true) {
+                                val read = zip.read(buffer)
+                                if (read < 0) break
+                                totalBytes += read
+                                require(totalBytes <= MAX_RUNTIME_ASSET_BYTES) { "Runtime assets exceed ${MAX_RUNTIME_ASSET_BYTES / (1024 * 1024)} MiB" }
+                                output.write(buffer, 0, read)
+                            }
+                        }
+                    }
+                    zip.closeEntry()
+                }
+            }
         }
     }
 
@@ -413,6 +468,7 @@ class OrchestratorService : Service() {
     companion object {
         private const val CHANNEL_ID = "hosted_servers"
         private const val NOTIFICATION_ID = 100
+        private const val MAX_RUNTIME_ASSET_BYTES = 32L * 1024L * 1024L
         const val EXTRA_PROFILE_ID = "profile_id"
         const val ACTION_START = "net.novax.luanet.START"
         const val ACTION_STOP = "net.novax.luanet.STOP"
