@@ -30,6 +30,6 @@ belong in `scripts/prepare-source.py` and must remain LGPL-2.1-or-later.
 
 The bridge runs inside one of five isolated Android processes, maps the profile paths to
 both old `MINETEST_*` and current `LUANTI_*` environment variables, streams logs and player
-events to Kotlin, pipes console commands to Luanti stdin, and requests a graceful stop
-through Luanti's kill-status interface. The JNI bridge never grants trusted-mod access or
-disables Luanti's security sandbox.
+events to Kotlin, routes admin console commands through Luanti's `ChatInterface`, and
+requests a graceful stop through Luanti's kill-status interface. The JNI bridge never
+grants trusted-mod access or disables Luanti's security sandbox.

@@ -6,7 +6,9 @@
 
 #include "irrlichttypes_bloated.h"
 #include "porting.h"
+#include "chat_interface.h"
 #include "util/numeric.h"
+#include "util/string.h"
 
 #include <android/log.h>
 #include <atomic>
@@ -85,6 +87,7 @@ jobject g_bridge = nullptr;
 std::mutex g_mutex;
 std::mutex g_io_mutex;
 std::mutex g_log_line_mutex;
+std::mutex g_chat_mutex;
 std::atomic<bool> g_running{false};
 std::atomic<bool> g_log_tail_running{false};
 std::atomic<bool> g_announced_ready{false};
@@ -92,6 +95,8 @@ int g_log_read = -1;
 int g_log_write = -1;
 int g_input_read = -1;
 int g_input_write = -1;
+ChatInterface *g_admin_chat = nullptr;
+std::string g_admin_nick = "LuaNet";
 
 std::string field(const std::string &json, const char *name)
 {
@@ -313,6 +318,22 @@ void set_path(const char *modern, const char *legacy, const std::string &value)
 }
 }
 
+extern "C" void luanet_set_admin_chat_interface(ChatInterface *iface, const char *nick)
+{
+	std::lock_guard<std::mutex> lock(g_chat_mutex);
+	g_admin_chat = iface;
+	g_admin_nick = nick && *nick ? nick : "LuaNet";
+	if (g_admin_chat)
+		g_admin_chat->command_queue.push_back(new ChatEventNick(CET_NICK_ADD, g_admin_nick));
+}
+
+extern "C" void luanet_clear_admin_chat_interface(ChatInterface *iface)
+{
+	std::lock_guard<std::mutex> lock(g_chat_mutex);
+	if (!iface || iface == g_admin_chat)
+		g_admin_chat = nullptr;
+}
+
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *)
 {
 	g_vm = vm;
@@ -397,6 +418,7 @@ Java_net_novax_luanet_runtime_NativeEngineBridge_run(JNIEnv *env, jobject instan
 		close(g_input_write);
 		g_input_write = -1;
 	}
+	luanet_clear_admin_chat_interface(nullptr);
 	close(g_input_read);
 	g_input_read = -1;
 	close(g_log_write);
@@ -426,14 +448,25 @@ Java_net_novax_luanet_runtime_NativeEngineBridge_submitCommand(JNIEnv *env, jobj
 	env->ReleaseStringUTFChars(command, raw);
 	if (text.empty())
 		return;
+	std::string chat_command = text;
+	if (chat_command.front() != '/')
+		chat_command.insert(chat_command.begin(), '/');
 	bool sent = false;
 	{
+		std::lock_guard<std::mutex> lock(g_chat_mutex);
+		if (g_running && g_admin_chat) {
+			g_admin_chat->command_queue.push_back(
+				new ChatEventChat(g_admin_nick, utf8_to_wide(chat_command)));
+			sent = true;
+		}
+	}
+	{
 		std::lock_guard<std::mutex> lock(g_io_mutex);
-		if (g_running && g_input_write >= 0)
-			sent = write_all(g_input_write, text + "\n");
+		if (!sent && g_running && g_input_write >= 0)
+			sent = write_all(g_input_write, chat_command + "\n");
 	}
 	if (!sent) {
 		callback("emitLog", "(ILjava/lang/String;)V",
-			std::string("Console command failed because Luanti stdin is not available: ") + text, 3);
+			std::string("Console command failed because Luanti admin interface is not available: ") + chat_command, 3);
 	}
 }
