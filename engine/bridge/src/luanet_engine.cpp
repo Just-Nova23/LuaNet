@@ -21,6 +21,9 @@
 
 extern int main(int argc, char *argv[]);
 
+struct android_app;
+extern "C" void android_main(android_app *) {}
+
 namespace porting {
 void osSpecificInit() {}
 void initAndroid() {}
