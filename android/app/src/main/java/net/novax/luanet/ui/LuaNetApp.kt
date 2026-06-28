@@ -9,8 +9,15 @@ import android.app.Activity
 import android.content.pm.PackageManager
 import android.os.Build
 import android.net.Uri
+import android.text.method.LinkMovementMethod
+import android.util.TypedValue
+import android.widget.TextView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.rememberTransformableState
+import androidx.compose.foundation.gestures.transformable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,6 +42,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.List as Terminal
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DateRange as Backup
 import androidx.compose.material.icons.filled.CheckCircle
@@ -42,7 +50,12 @@ import androidx.compose.material.icons.filled.Share as Cloud
 import androidx.compose.material.icons.filled.Share as ContentCopy
 import androidx.compose.material.icons.filled.Home as Dashboard
 import androidx.compose.material.icons.filled.AddCircle as FolderZip
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Forum
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Person as Group
+import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Share as Lan
 import androidx.compose.material.icons.filled.Build as Memory
 import androidx.compose.material.icons.filled.PlayArrow
@@ -85,16 +98,23 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
+import io.noties.markwon.Markwon
 import net.novax.luanet.data.db.ServerProfileEntity
 import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.R
@@ -834,9 +854,10 @@ private fun ContentPackageCard(
 @Composable
 private fun ContentThumbnail(url: String?, modifier: Modifier) {
     val shape = RoundedCornerShape(16.dp)
+    val imageModifier = modifier.clip(shape).background(MaterialTheme.colorScheme.surface)
     if (url.isNullOrBlank()) {
         Box(
-            modifier.clip(shape).background(MaterialTheme.colorScheme.surface),
+            imageModifier,
             contentAlignment = Alignment.Center,
         ) {
             Icon(Icons.Default.FolderZip, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -845,9 +866,20 @@ private fun ContentThumbnail(url: String?, modifier: Modifier) {
         AsyncImage(
             model = url,
             contentDescription = null,
-            modifier = modifier.clip(shape).background(MaterialTheme.colorScheme.surface),
+            modifier = imageModifier,
             contentScale = ContentScale.Crop,
         )
+    }
+}
+
+@Composable
+private fun ClickableContentImage(url: String?, modifier: Modifier, onOpen: (String) -> Unit) {
+    if (url == null) {
+        ContentThumbnail(null, modifier)
+    } else {
+        Box(modifier.clickable { onOpen(url) }) {
+            ContentThumbnail(url, Modifier.matchParentSize())
+        }
     }
 }
 
@@ -886,13 +918,25 @@ private fun ContentDetailDialog(
 ) {
     val detail = detailState?.detail
     val mergedBadges = remember(item, detail) { (item.badges + detail?.badges().orEmpty()).distinct() }
+    val heroImage = detail?.screenshots?.firstOrNull() ?: detail?.thumbnail ?: item.thumbnail
+    var zoomImage by remember(item.key) { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val externalLinks = remember(detail) {
+        buildList {
+            detail?.url?.let { add(ExternalContentLink("ContentDB", it, Icons.Default.Public)) }
+            detail?.website?.let { add(ExternalContentLink("Website", it, Icons.Default.Language)) }
+            detail?.repo?.let { add(ExternalContentLink("Repo", it, Icons.Default.Code)) }
+            detail?.forumUrl?.let { add(ExternalContentLink("Forum", it, Icons.Default.Forum)) }
+            detail?.issueTracker?.let { add(ExternalContentLink("Issues", it, Icons.Default.BugReport)) }
+        }.distinctBy { it.url }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(detail?.title?.ifBlank { item.title } ?: item.title.ifBlank { item.name }) },
         text = {
             LazyColumn(Modifier.heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
-                    ContentThumbnail(detail?.thumbnail ?: item.thumbnail, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                    ClickableContentImage(heroImage, Modifier.fillMaxWidth().aspectRatio(16f / 9f), onOpen = { zoomImage = it })
                 }
                 item {
                     Text("${item.author}/${item.name}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -915,11 +959,10 @@ private fun ContentDetailDialog(
                     }
                 }
                 item {
-                    Text(
+                    MarkdownDescription(
                         detail?.longDescription?.takeIf { it.isNotBlank() }
                             ?: detail?.shortDescription?.takeIf { it.isNotBlank() }
                             ?: item.shortDescription.ifBlank { "No description provided." },
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 if (!detail?.screenshots.isNullOrEmpty()) {
@@ -928,11 +971,10 @@ private fun ContentDetailDialog(
                             Text("Screenshots", style = MaterialTheme.typography.titleMedium)
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 items(detail!!.screenshots) { screenshot ->
-                                    AsyncImage(
-                                        model = screenshot,
-                                        contentDescription = null,
-                                        modifier = Modifier.width(220.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surface),
-                                        contentScale = ContentScale.Crop,
+                                    ClickableContentImage(
+                                        url = screenshot,
+                                        modifier = Modifier.width(220.dp).aspectRatio(16f / 9f),
+                                        onOpen = { zoomImage = it },
                                     )
                                 }
                             }
@@ -946,10 +988,24 @@ private fun ContentDetailDialog(
                             Text("Type: ${detail.type.ifBlank { item.type }}", style = MaterialTheme.typography.bodySmall)
                             detail.license?.let { Text("License: $it", style = MaterialTheme.typography.bodySmall) }
                             detail.mediaLicense?.let { Text("Media license: $it", style = MaterialTheme.typography.bodySmall) }
-                            listOfNotNull(detail.url, detail.website, detail.repo, detail.forumUrl, detail.issueTracker)
-                                .distinct()
-                                .take(4)
-                                .forEach { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary) }
+                        }
+                    }
+                }
+                if (externalLinks.isNotEmpty()) {
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Links", style = MaterialTheme.typography.titleMedium)
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(externalLinks) { link ->
+                                    FilledTonalButton(onClick = { openExternalLink(context, link.url) }) {
+                                        Icon(link.icon, null, Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(link.label)
+                                        Spacer(Modifier.width(4.dp))
+                                        Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(16.dp))
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -963,6 +1019,98 @@ private fun ContentDetailDialog(
             ) { Text(if (installed) "Installed" else if (packageBusy) "Installing…" else "Install") }
         },
     )
+    zoomImage?.let { image ->
+        ZoomableImageDialog(imageUrl = image, onDismiss = { zoomImage = null })
+    }
+}
+
+private data class ExternalContentLink(val label: String, val url: String, val icon: ImageVector)
+
+private fun openExternalLink(context: Context, url: String) {
+    runCatching {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
+}
+
+@Composable
+private fun MarkdownDescription(markdown: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val colors = MaterialTheme.colorScheme
+    val markwon = remember(context) { Markwon.create(context) }
+    AndroidView(
+        modifier = modifier.fillMaxWidth(),
+        factory = { viewContext ->
+            TextView(viewContext).apply {
+                movementMethod = LinkMovementMethod.getInstance()
+                linksClickable = true
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setLineSpacing(0f, 1.12f)
+            }
+        },
+        update = { textView ->
+            textView.setTextColor(colors.onSurfaceVariant.toArgb())
+            textView.setLinkTextColor(colors.primary.toArgb())
+            markwon.setMarkdown(textView, markdown)
+        },
+    )
+}
+
+@Composable
+private fun ZoomableImageDialog(imageUrl: String, onDismiss: () -> Unit) {
+    var scale by remember(imageUrl) { mutableStateOf(1f) }
+    var offsetX by remember(imageUrl) { mutableStateOf(0f) }
+    var offsetY by remember(imageUrl) { mutableStateOf(0f) }
+    val transformState = rememberTransformableState { zoomChange, panChange, _ ->
+        scale = (scale * zoomChange).coerceIn(1f, 6f)
+        if (scale <= 1.01f) {
+            scale = 1f
+            offsetX = 0f
+            offsetY = 0f
+        } else {
+            offsetX += panChange.x
+            offsetY += panChange.y
+        }
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(color = Color.Black.copy(alpha = 0.96f), modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize()) {
+                AsyncImage(
+                    model = imageUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = offsetX
+                            translationY = offsetY
+                        }
+                        .transformable(transformState)
+                        .pointerInput(imageUrl) {
+                            detectTapGestures(onDoubleTap = {
+                                scale = 1f
+                                offsetX = 0f
+                                offsetY = 0f
+                            })
+                        },
+                    contentScale = ContentScale.Fit,
+                )
+                FilledTonalButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(20.dp),
+                ) { Text("Close") }
+                Text(
+                    "Pinch to zoom · drag to pan · double tap to reset",
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(20.dp),
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
