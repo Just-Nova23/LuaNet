@@ -36,6 +36,7 @@ import net.novax.luanet.domain.ServerState
 import net.novax.luanet.network.TunnelLease
 import java.io.File
 import java.time.Instant
+import java.util.zip.ZipFile
 
 class OrchestratorService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -97,8 +98,7 @@ class OrchestratorService : Service() {
         val slot = (0 until 5).firstOrNull { candidate -> sessions.values.none { it.slot == candidate } } ?: return
         val port = 30_000 + slot
         val release = EngineCatalog.find(profile.engineVersion) ?: return
-        val library = File(applicationInfo.nativeLibraryDir, "lib${release.libraryName}.so")
-        if (!library.isFile) {
+        if (!hasBundledLibrary(release.libraryName)) {
             val text = "Engine ${profile.engineVersion} is not bundled in this APK. Build native artifacts and sync them before starting this server."
             repository.updateRuntime(profileId, ServerState.CRASHED, null)
             RuntimeRegistry.update(profileId) { RuntimeSnapshot(profileId, "CRASHED", -1, 0, logs = listOf(text)) }
@@ -118,6 +118,23 @@ class OrchestratorService : Service() {
         repository.updateRuntime(profile.id, ServerState.STARTING, port)
         RuntimeRegistry.update(profile.id) { RuntimeSnapshot(profile.id, "STARTING", slot, port) }
         bindEngine(profile.id, slot, engineConfiguration)
+    }
+
+    private fun hasBundledLibrary(libraryName: String): Boolean {
+        val filename = "lib$libraryName.so"
+        val apkPaths = buildList {
+            add(applicationInfo.sourceDir)
+            applicationInfo.splitSourceDirs?.let(::addAll)
+        }
+        return apkPaths.any { path ->
+            runCatching {
+                ZipFile(path).use { zip ->
+                    zip.entries().asSequence().any { entry ->
+                        !entry.isDirectory && entry.name.startsWith("lib/") && entry.name.endsWith("/$filename")
+                    }
+                }
+            }.getOrDefault(false)
+        }
     }
 
     private fun bindEngine(profileId: String, slot: Int, configuration: EngineConfiguration) {
