@@ -6,6 +6,19 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val luanetDebugKeystorePath = providers.gradleProperty("LUANET_DEBUG_KEYSTORE")
+    .orElse(providers.environmentVariable("LUANET_DEBUG_KEYSTORE"))
+val luanetDebugKeystore = luanetDebugKeystorePath.orNull?.let { rootProject.file(it) }
+val luanetDebugStorePassword = providers.gradleProperty("LUANET_DEBUG_KEYSTORE_PASSWORD")
+    .orElse(providers.environmentVariable("LUANET_DEBUG_KEYSTORE_PASSWORD"))
+    .orElse("luanet-debug")
+val luanetDebugKeyAlias = providers.gradleProperty("LUANET_DEBUG_KEY_ALIAS")
+    .orElse(providers.environmentVariable("LUANET_DEBUG_KEY_ALIAS"))
+    .orElse("luanet-debug")
+val luanetDebugKeyPassword = providers.gradleProperty("LUANET_DEBUG_KEY_PASSWORD")
+    .orElse(providers.environmentVariable("LUANET_DEBUG_KEY_PASSWORD"))
+    .orElse(luanetDebugStorePassword)
+
 android {
     namespace = "net.novax.luanet"
     compileSdk = 35
@@ -23,10 +36,24 @@ android {
         buildConfigField("String", "CONTROL_PLANE_URL", "\"https://api.luanet.novaxhosting.com\"")
     }
 
+    signingConfigs {
+        if (luanetDebugKeystore?.isFile == true) {
+            create("luanetDebug") {
+                storeFile = luanetDebugKeystore
+                storePassword = luanetDebugStorePassword.get()
+                keyAlias = luanetDebugKeyAlias.get()
+                keyPassword = luanetDebugKeyPassword.get()
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            if (luanetDebugKeystore?.isFile == true) {
+                signingConfig = signingConfigs.getByName("luanetDebug")
+            }
             buildConfigField("String", "CONTROL_PLANE_URL", "\"http://10.0.2.2:8080\"")
         }
         release {

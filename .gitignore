@@ -13,6 +13,9 @@ local.properties
 *.apk
 *.aab
 *.apks
+android/debug.keystore
+*.jks
+*.keystore
 
 # Go
 control-plane/bin/
