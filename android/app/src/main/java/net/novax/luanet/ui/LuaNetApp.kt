@@ -537,7 +537,7 @@ private fun Dashboard(
     val context = LocalContext.current
     val sessions by RuntimeRegistry.sessions.collectAsStateWithLifecycle()
     val runtime = sessions[profile.id]
-    val running = runtime?.state in setOf("STARTING", "RUNNING") || profile.state in setOf(ServerState.STARTING, ServerState.RUNNING)
+    val running = runtime?.state in setOf("STARTING", "RUNNING", "STOPPING")
     var selectedTab by remember { mutableIntStateOf(0) }
     val tabs = listOf(
         DashboardTab("Overview", Icons.Default.Dashboard), DashboardTab("Console", Icons.AutoMirrored.Filled.Terminal),
@@ -571,7 +571,9 @@ private fun Dashboard(
                 0 -> Overview(
                     profile = profile,
                     runtime = runtime,
-                    localPort = runtime?.localPort ?: profile.localPort,
+                    localPort = runtime?.localPort ?: profile.localPort?.takeUnless {
+                        runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
+                    },
                     context = context,
                     onStartPublicTunnel = onStartPublicTunnel,
                     onStopPublicTunnel = onStopPublicTunnel,
@@ -1623,17 +1625,18 @@ private fun Overview(
     var publicMessage by remember(profile.id) { mutableStateOf<String?>(null) }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         val runtimeState = runtime?.state
-        val running = runtimeState in setOf("STARTING", "RUNNING") || profile.state in setOf(ServerState.STARTING, ServerState.RUNNING)
-        val state = runtimeState ?: profile.state.name
+        val staleActiveState = runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
+        val running = runtimeState in setOf("STARTING", "RUNNING", "STOPPING")
+        val state = runtimeState ?: if (staleActiveState) "CRASHED" else profile.state.name
         val publicHost = runtime?.publicHost ?: profile.publicHost
         val publicPort = runtime?.publicPort ?: profile.publicPort
-        val publicEnabled = publicHost != null && publicPort != null && (runtime?.publicPort != null || profile.publicEnabled)
+        val publicEnabled = !staleActiveState && publicHost != null && publicPort != null && (runtime?.publicPort != null || profile.publicEnabled)
         item { Spacer(Modifier.height(4.dp)) }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = if (running) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(20.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(12.dp).background(if (running) MaterialTheme.colorScheme.primary else stateColor(profile.state), CircleShape))
+                        Box(Modifier.size(12.dp).background(if (running) MaterialTheme.colorScheme.primary else if (staleActiveState) MaterialTheme.colorScheme.error else stateColor(profile.state), CircleShape))
                         Spacer(Modifier.width(10.dp)); Text(state.lowercase().replaceFirstChar(Char::uppercase), style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.weight(1f)); Text("${profile.maxPlayers} slots", style = MaterialTheme.typography.labelLarge)
                     }

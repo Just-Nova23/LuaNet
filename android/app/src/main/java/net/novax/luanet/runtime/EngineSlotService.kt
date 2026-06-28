@@ -15,6 +15,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
     private val executor = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
+    private val ready = AtomicBoolean(false)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private var callback: Messenger? = null
     private var bridge: NativeEngineBridge? = null
     private var profileId: String? = null
@@ -24,6 +26,7 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
 
     override fun onDestroy() {
         bridge?.requestStop()
+        mainHandler.removeCallbacksAndMessages(null)
         executor.shutdownNow()
         super.onDestroy()
     }
@@ -45,6 +48,7 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
 
     private fun start(configurationJson: String) {
         if (!running.compareAndSet(false, true)) return
+        ready.set(false)
         val configuration = runCatching { Json.decodeFromString<EngineConfiguration>(configurationJson) }.getOrElse { error ->
             onLog(3, error.message ?: error.javaClass.simpleName)
             sendState("CRASHED")
@@ -54,10 +58,17 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
         }
         profileId = configuration.profileId
         sendState("STARTING")
+        onLog(1, "Starting Luanti ${configuration.engineVersion} on local UDP port ${configuration.localPort}")
         executor.execute {
             try {
                 val native = NativeEngineBridge(this).also { bridge = it }
                 native.load(configuration.libraryName)
+                mainHandler.postDelayed({
+                    if (running.get() && ready.compareAndSet(false, true)) {
+                        onLog(1, "Engine process is alive; marking server running while Luanti continues loading.")
+                        sendState("RUNNING")
+                    }
+                }, READY_FALLBACK_MS)
                 val exitCode = native.run(Json.encodeToString(configuration))
                 sendState(if (exitCode == 0) "STOPPED" else "CRASHED")
             } catch (error: Throwable) {
@@ -66,6 +77,7 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
             } finally {
                 running.set(false)
                 bridge = null
+                mainHandler.removeCallbacksAndMessages(null)
                 stopSelf()
             }
         }
@@ -87,7 +99,16 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
     }
     override fun onPlayerJoined(name: String) = send(EngineProtocol.PLAYER_JOIN) { putString(EngineProtocol.KEY_TEXT, name) }
     override fun onPlayerLeft(name: String) = send(EngineProtocol.PLAYER_LEAVE) { putString(EngineProtocol.KEY_TEXT, name) }
-    override fun onReady() = sendState("RUNNING")
+    override fun onReady() {
+        if (ready.compareAndSet(false, true)) {
+            onLog(1, "Luanti reported server ready")
+        }
+        sendState("RUNNING")
+    }
+
+    companion object {
+        private const val READY_FALLBACK_MS = 8_000L
+    }
 }
 
 class EngineSlot0Service : EngineSlotService()

@@ -123,7 +123,18 @@ class OrchestratorService : Service() {
             "__luanet_console_${profile.id.take(8)}",
         )
         repository.updateRuntime(profile.id, ServerState.STARTING, port)
-        RuntimeRegistry.update(profile.id) { RuntimeSnapshot(profile.id, "STARTING", slot, port) }
+        RuntimeRegistry.update(profile.id) {
+            RuntimeSnapshot(
+                profile.id,
+                "STARTING",
+                slot,
+                port,
+                logs = listOf(
+                    "Preparing Luanti ${profile.engineVersion} runtime",
+                    "Starting isolated engine slot $slot on UDP port $port",
+                ),
+            )
+        }
         bindEngine(profile.id, slot, engineConfiguration)
     }
 
@@ -236,7 +247,13 @@ class OrchestratorService : Service() {
         if (engine != null) runCatching { unbindService(engine.connection) }
         val serverState = runCatching { ServerState.valueOf(state) }.getOrDefault(ServerState.CRASHED)
         scope.launch { repository.updateRuntime(profileId, serverState, null) }
-        RuntimeRegistry.update(profileId) { previous -> previous?.copy(state = state, localPort = 0) }
+        RuntimeRegistry.update(profileId) { previous ->
+            previous?.copy(
+                state = state,
+                localPort = 0,
+                logs = (previous.logs + "State: ${state.lowercase().replaceFirstChar(Char::uppercase)}").takeLast(2_000),
+            )
+        }
         updateNotification()
         if (sessions.isEmpty()) stopSelf()
     }
@@ -318,11 +335,9 @@ class OrchestratorService : Service() {
                 EngineProtocol.STATE -> {
                     val state = message.data.getString(EngineProtocol.KEY_STATE).orEmpty()
                     if (state == "STOPPED" || state == "CRASHED") engineEnded(profileId, state)
-                    else RuntimeRegistry.update(profileId) { it?.copy(state = state) }
+                    else updateEngineState(profileId, state)
                 }
-                EngineProtocol.LOG -> RuntimeRegistry.update(profileId) { previous ->
-                    previous?.copy(logs = (previous.logs + message.data.getString(EngineProtocol.KEY_TEXT).orEmpty()).takeLast(2_000))
-                }
+                EngineProtocol.LOG -> appendLog(profileId, message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
                 EngineProtocol.PLAYER_JOIN -> RuntimeRegistry.update(profileId) { previous ->
                     sessions[profileId]?.emptySince = null
                     previous?.copy(players = previous.players + message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())
@@ -333,6 +348,43 @@ class OrchestratorService : Service() {
                     previous?.copy(players = remaining)
                 }
             }
+        }
+    }
+
+    private fun updateEngineState(profileId: String, state: String) {
+        val engine = sessions[profileId]
+        val port = engine?.let { 30_000 + it.slot }
+            ?: RuntimeRegistry.sessions.value[profileId]?.localPort?.takeIf { it > 0 }
+            ?: 0
+        RuntimeRegistry.update(profileId) { previous ->
+            val logs = if (previous?.state == state) {
+                previous.logs
+            } else {
+                (previous?.logs.orEmpty() + "State: ${state.lowercase().replaceFirstChar(Char::uppercase)}").takeLast(2_000)
+            }
+            previous?.copy(state = state, localPort = port, logs = logs) ?: RuntimeSnapshot(
+                profileId = profileId,
+                state = state,
+                slot = engine?.slot ?: -1,
+                localPort = port,
+                logs = logs,
+            )
+        }
+        val persistedState = runCatching { ServerState.valueOf(state) }.getOrNull()
+        if (persistedState != null) {
+            scope.launch { repository.updateRuntime(profileId, persistedState, port.takeIf { it > 0 }) }
+        }
+    }
+
+    private fun appendLog(profileId: String, line: String) {
+        RuntimeRegistry.update(profileId) { previous ->
+            previous?.copy(logs = (previous.logs + line).takeLast(2_000)) ?: RuntimeSnapshot(
+                profileId = profileId,
+                state = "STARTING",
+                slot = sessions[profileId]?.slot ?: -1,
+                localPort = sessions[profileId]?.let { 30_000 + it.slot } ?: 0,
+                logs = listOf(line),
+            )
         }
     }
 

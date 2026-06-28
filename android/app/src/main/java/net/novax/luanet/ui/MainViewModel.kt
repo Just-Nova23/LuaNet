@@ -22,6 +22,7 @@ import net.novax.luanet.data.content.ContentPackageDetail
 import net.novax.luanet.data.content.DownloadProgress
 import net.novax.luanet.runtime.EntitlementStore
 import net.novax.luanet.runtime.OrchestratorService
+import net.novax.luanet.runtime.RuntimeRegistry
 import java.io.File
 import java.time.Instant
 
@@ -39,6 +40,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         tier = entitlementStore.current(),
     ))
     val account: StateFlow<AccountState> = _account.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            repository.recoverAbandonedRuntimeStates(RuntimeRegistry.sessions.value.keys)
+        }
+    }
 
     fun create(
         name: String,

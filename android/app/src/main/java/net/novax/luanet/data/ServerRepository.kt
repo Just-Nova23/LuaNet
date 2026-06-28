@@ -65,6 +65,17 @@ class ServerRepository(
     suspend fun updatePublic(id: String, enabled: Boolean, host: String?, port: Int?) =
         dao.updatePublic(id, enabled, host, port, System.currentTimeMillis())
 
+    suspend fun recoverAbandonedRuntimeStates(liveProfileIds: Set<String> = emptySet()): Int {
+        val abandoned = activeProfiles().filterNot { it.id in liveProfileIds }
+        if (abandoned.isEmpty()) return 0
+        val now = System.currentTimeMillis()
+        abandoned.forEach { profile ->
+            dao.updateRuntime(profile.id, ServerState.CRASHED, null, now)
+            dao.updatePublic(profile.id, false, null, null, now)
+        }
+        return abandoned.size
+    }
+
     suspend fun updateAutoOff(id: String, enabled: Boolean, minutes: Int) {
         require(minutes in 1..1_440) { "Auto off must be between 1 minute and 24 hours" }
         val profile = requireNotNull(dao.profile(id)) { "Server profile not found" }
