@@ -50,4 +50,31 @@ interface LuaNetDao {
     suspend fun automaticBackups(profileId: String): List<BackupEntity>
 
     @Delete suspend fun deleteBackup(backup: BackupEntity)
+
+    @Query("SELECT * FROM server_players WHERE profileId=:profileId ORDER BY online DESC, lastSeenAt DESC, name COLLATE NOCASE")
+    fun observePlayers(profileId: String): Flow<List<ServerPlayerEntity>>
+
+    @Query("SELECT * FROM server_players WHERE profileId=:profileId AND name=:name")
+    suspend fun player(profileId: String, name: String): ServerPlayerEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertPlayer(player: ServerPlayerEntity)
+
+    @Query("UPDATE server_players SET online=0, lastSeenAt=:seenAt WHERE profileId=:profileId")
+    suspend fun markAllPlayersOffline(profileId: String, seenAt: Long)
+
+    @Query("UPDATE server_players SET banned=:banned WHERE profileId=:profileId AND name=:name")
+    suspend fun updatePlayerBanned(profileId: String, name: String, banned: Boolean)
+
+    @Query("UPDATE server_players SET admin=:admin WHERE profileId=:profileId AND name=:name")
+    suspend fun updatePlayerAdmin(profileId: String, name: String, admin: Boolean)
+
+    @Query("SELECT * FROM server_config_settings WHERE profileId=:profileId ORDER BY key")
+    fun observeConfigSettings(profileId: String): Flow<List<ServerConfigSettingEntity>>
+
+    @Query("SELECT * FROM server_config_settings WHERE profileId=:profileId ORDER BY key")
+    suspend fun configSettings(profileId: String): List<ServerConfigSettingEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertConfigSetting(setting: ServerConfigSettingEntity)
 }

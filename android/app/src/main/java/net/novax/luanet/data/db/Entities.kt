@@ -28,6 +28,21 @@ data class ServerProfileEntity(
     val publicPort: Int?,
     val autoOffEnabled: Boolean,
     val autoOffMinutes: Int,
+    val serverDescription: String,
+    val motd: String,
+    val announceServer: Boolean,
+    val defaultPrivileges: String,
+    val disallowEmptyPassword: Boolean,
+    val enableRollback: Boolean,
+    val timeSpeed: Int,
+    val activeBlockRange: Int,
+    val maxBlockSendDistance: Int,
+    val maxBlockGenerateDistance: Int,
+    val dedicatedServerStepMs: Int,
+    val maxObjectsPerBlock: Int,
+    val itemEntityTtl: Int,
+    val maxPacketsPerIteration: Int,
+    val mapgenLimit: Int,
     val createdAt: Long,
     val updatedAt: Long,
 )
@@ -71,4 +86,41 @@ data class BackupEntity(
     val reason: String,
     val createdAt: Long,
     val sizeBytes: Long,
+)
+
+@Entity(
+    tableName = "server_players",
+    primaryKeys = ["profileId", "name"],
+    foreignKeys = [ForeignKey(
+        entity = ServerProfileEntity::class,
+        parentColumns = ["id"], childColumns = ["profileId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index("profileId"), Index(value = ["profileId", "name"], unique = true)],
+)
+data class ServerPlayerEntity(
+    val profileId: String,
+    val name: String,
+    val firstSeenAt: Long,
+    val lastSeenAt: Long,
+    val online: Boolean,
+    val banned: Boolean,
+    val admin: Boolean,
+)
+
+@Entity(
+    tableName = "server_config_settings",
+    primaryKeys = ["profileId", "key"],
+    foreignKeys = [ForeignKey(
+        entity = ServerProfileEntity::class,
+        parentColumns = ["id"], childColumns = ["profileId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index("profileId")],
+)
+data class ServerConfigSettingEntity(
+    val profileId: String,
+    val key: String,
+    val value: String,
+    val updatedAt: Long,
 )

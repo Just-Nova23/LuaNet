@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.novax.luanet.LuaNetApplication
 import net.novax.luanet.data.ArchiveCopyProgress
+import net.novax.luanet.data.ServerProfileSettingsUpdate
 import net.novax.luanet.domain.EngineCatalog
 import net.novax.luanet.domain.SubscriptionTier
 import net.novax.luanet.data.importer.ImportKind
@@ -50,6 +51,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun create(
         name: String,
         engineVersion: String = EngineCatalog.latest.version,
+        mapgen: String = "v7",
         maxPlayers: Int = 8,
         creative: Boolean = false,
         damage: Boolean = true,
@@ -57,7 +59,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         onCreated: (String) -> Unit,
     ) {
         viewModelScope.launch {
-            val profile = repository.create(name, engineVersion, maxPlayers, creative, damage, pvp)
+            val profile = repository.create(name, engineVersion, mapgen, maxPlayers, creative, damage, pvp)
             onCreated(profile.id)
         }
     }
@@ -66,41 +68,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch { repository.updateAutoOff(profileId, enabled, minutes) }
     }
 
-    fun updateServerSettings(
-        profileId: String,
-        name: String,
-        engineVersion: String,
-        gameKey: String?,
-        mapgen: String,
-        maxPlayers: Int,
-        creative: Boolean,
-        damage: Boolean,
-        pvp: Boolean,
-        autoOffEnabled: Boolean,
-        autoOffMinutes: Int,
-        onResult: (Result<String>) -> Unit,
-    ) {
+    fun updateServerSettings(update: ServerProfileSettingsUpdate, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
-                repository.updateServerSettings(
-                    id = profileId,
-                    name = name,
-                    engineVersion = engineVersion,
-                    gameKey = gameKey,
-                    mapgen = mapgen,
-                    maxPlayers = maxPlayers,
-                    creative = creative,
-                    damage = damage,
-                    pvp = pvp,
-                    autoOffEnabled = autoOffEnabled,
-                    autoOffMinutes = autoOffMinutes,
-                )
+                repository.updateServerSettings(update)
                 "Server settings saved"
             })
         }
     }
 
     fun installedPackages(profileId: String) = repository.observePackages(profileId)
+    fun players(profileId: String) = repository.observePlayers(profileId)
+    fun modSettings(profileId: String) = repository.observeModSettings(profileId)
+
+    fun saveModSetting(profileId: String, key: String, value: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                repository.saveModSetting(profileId, key, value)
+                "Mod setting saved. Restart the server to apply it."
+            })
+        }
+    }
 
     fun importArchive(profileId: String, uri: Uri, kind: ImportKind, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
