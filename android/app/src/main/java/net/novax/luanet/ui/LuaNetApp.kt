@@ -120,7 +120,11 @@ import coil.compose.AsyncImage
 import io.noties.markwon.Markwon
 import net.novax.luanet.data.db.ServerProfileEntity
 import net.novax.luanet.data.db.InstalledPackageEntity
+import net.novax.luanet.data.db.ServerPlayerEntity
 import net.novax.luanet.R
+import net.novax.luanet.data.ServerModSetting
+import net.novax.luanet.data.ServerProfileSettingsUpdate
+import net.novax.luanet.data.ServerRepository
 import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.data.content.ContentPackage
 import net.novax.luanet.domain.EngineCatalog
@@ -140,17 +144,7 @@ private sealed interface Destination {
 }
 
 private typealias ServerSettingsSaver = (
-    profileId: String,
-    name: String,
-    engineVersion: String,
-    gameKey: String?,
-    mapgen: String,
-    maxPlayers: Int,
-    creative: Boolean,
-    damage: Boolean,
-    pvp: Boolean,
-    autoOffEnabled: Boolean,
-    autoOffMinutes: Int,
+    update: ServerProfileSettingsUpdate,
     onResult: (Result<String>) -> Unit,
 ) -> Unit
 
@@ -176,21 +170,26 @@ fun LuaNetApp(viewModel: MainViewModel) {
         )
         Destination.Create -> CreateServer(
             onBack = { destination = Destination.Servers },
-            onCreate = { name, version, players, creative, damage, pvp ->
-                viewModel.create(name, version, players, creative, damage, pvp) {
+            onCreate = { name, version, mapgen, players, creative, damage, pvp ->
+                viewModel.create(name, version, mapgen, players, creative, damage, pvp) {
                     destination = Destination.Dashboard(it)
                 }
             },
         )
         is Destination.Dashboard -> {
             val installedPackages by viewModel.installedPackages(current.id).collectAsStateWithLifecycle(emptyList())
+            val players by viewModel.players(current.id).collectAsStateWithLifecycle(emptyList())
+            val modSettings by viewModel.modSettings(current.id).collectAsStateWithLifecycle(emptyList())
             Dashboard(
                 profile = profiles.firstOrNull { it.id == current.id },
                 installedPackages = installedPackages,
+                players = players,
+                modSettings = modSettings,
                 onBack = { destination = Destination.Servers },
                 onOpenContentLibrary = { destination = Destination.ContentLibrary(current.id) },
                 onOpenZipImport = { destination = Destination.ZipImport(current.id) },
                 onSaveServerSettings = viewModel::updateServerSettings,
+                onSaveModSetting = viewModel::saveModSetting,
                 onCreateBackup = viewModel::createBackup,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
                 onStopPublicTunnel = viewModel::stopPublicTunnel,
@@ -436,15 +435,17 @@ private fun stateColor(state: ServerState) = when (state) {
 @Composable
 private fun CreateServer(
     onBack: () -> Unit,
-    onCreate: (String, String, Int, Boolean, Boolean, Boolean) -> Unit,
+    onCreate: (String, String, String, Int, Boolean, Boolean, Boolean) -> Unit,
 ) {
     var name by remember { mutableStateOf("") }
     var version by remember { mutableStateOf(EngineCatalog.latest.version) }
+    var mapgen by remember { mutableStateOf("v7") }
     var players by remember { mutableStateOf("8") }
     var creative by remember { mutableStateOf(false) }
     var damage by remember { mutableStateOf(true) }
     var pvp by remember { mutableStateOf(true) }
     var showVersions by remember { mutableStateOf(false) }
+    var showMapgens by remember { mutableStateOf(false) }
     Scaffold(topBar = { TopAppBar(title = { Text("Create server") }, navigationIcon = {
         IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
     }) }) { padding ->
@@ -470,6 +471,9 @@ private fun CreateServer(
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                     Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Gameplay", style = MaterialTheme.typography.titleMedium)
+                        FilledTonalButton(onClick = { showMapgens = true }, modifier = Modifier.fillMaxWidth()) {
+                            Icon(Icons.Default.Public, null); Spacer(Modifier.width(8.dp)); Text("Map generator $mapgen")
+                        }
                         OutlinedTextField(players, { players = it.filter(Char::isDigit).take(3) }, label = { Text("Maximum players") }, modifier = Modifier.fillMaxWidth())
                         Toggle("Creative mode", "Unlimited items and instant building", creative) { creative = it }
                         HorizontalDivider()
@@ -491,7 +495,7 @@ private fun CreateServer(
             }
             item {
                 Button(
-                    onClick = { onCreate(name, version, players.toIntOrNull() ?: 8, creative, damage, pvp) },
+                    onClick = { onCreate(name, version, mapgen, players.toIntOrNull() ?: 8, creative, damage, pvp) },
                     enabled = name.isNotBlank() && (players.toIntOrNull() ?: 0) in 1..100,
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                 ) { Text("Create server"); Spacer(Modifier.width(8.dp)); Icon(Icons.AutoMirrored.Filled.ArrowForward, null) }
@@ -511,6 +515,21 @@ private fun CreateServer(
         },
         confirmButton = { TextButton(onClick = { showVersions = false }) { Text("Close") } },
     )
+    if (showMapgens) AlertDialog(
+        onDismissRequest = { showMapgens = false },
+        title = { Text("Map generator") },
+        text = {
+            LazyColumn { items(ServerRepository.MAPGENS) { item ->
+                TextButton(onClick = { mapgen = item; showMapgens = false }, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.fillMaxWidth()) {
+                        Text(item)
+                        Text(mapgenDescription(item), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } }
+        },
+        confirmButton = { TextButton(onClick = { showMapgens = false }) { Text("Close") } },
+    )
 }
 
 @Composable
@@ -522,15 +541,47 @@ private fun Toggle(label: String, detail: String? = null, value: Boolean, enable
     }
 }
 
+@Composable
+private fun NumberSetting(label: String, detail: String, value: String, enabled: Boolean, onChange: (String) -> Unit) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text(label) },
+        supportingText = { Text(detail) },
+        singleLine = true,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+private fun String.filterSignedDigits(max: Int): String {
+    val sign = if (startsWith("-")) "-" else ""
+    return sign + filter(Char::isDigit).take(max)
+}
+
+private fun mapgenDescription(name: String): String = when (name) {
+    "v7" -> "Modern general-purpose terrain; good default."
+    "valleys" -> "Terrain with wide valleys and rivers."
+    "carpathian" -> "Mountain-heavy terrain."
+    "flat" -> "Mostly flat worlds for building."
+    "fractal" -> "Experimental fractal terrain."
+    "singlenode" -> "Empty single-node world; used by special games."
+    "v6" -> "Older classic terrain generator."
+    else -> "Luanti map generator."
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun Dashboard(
     profile: ServerProfileEntity?,
     installedPackages: List<InstalledPackageEntity>,
+    players: List<ServerPlayerEntity>,
+    modSettings: List<ServerModSetting>,
     onBack: () -> Unit,
     onOpenContentLibrary: () -> Unit,
     onOpenZipImport: () -> Unit,
     onSaveServerSettings: ServerSettingsSaver,
+    onSaveModSetting: (String, String, String, (Result<String>) -> Unit) -> Unit,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
@@ -541,11 +592,16 @@ private fun Dashboard(
     val runtime = sessions[profile.id]
     val running = runtime?.state in setOf("STARTING", "RUNNING", "STOPPING")
     var selectedTab by remember { mutableIntStateOf(0) }
-    val tabs = listOf(
-        DashboardTab("Overview", Icons.Default.Dashboard), DashboardTab("Console", Icons.AutoMirrored.Filled.Terminal),
-        DashboardTab("Players", Icons.Default.Group), DashboardTab("Content", Icons.Default.FolderZip),
-        DashboardTab("Settings", Icons.Default.Settings), DashboardTab("Backups", Icons.Default.Backup),
-    )
+    val tabs = buildList {
+        add(DashboardTab(DashboardTabKey.OVERVIEW, "Overview", Icons.Default.Dashboard))
+        add(DashboardTab(DashboardTabKey.CONSOLE, "Console", Icons.AutoMirrored.Filled.Terminal))
+        add(DashboardTab(DashboardTabKey.PLAYERS, "Players", Icons.Default.Group))
+        add(DashboardTab(DashboardTabKey.CONTENT, "Content", Icons.Default.FolderZip))
+        add(DashboardTab(DashboardTabKey.SETTINGS, "Settings", Icons.Default.Settings))
+        if (modSettings.isNotEmpty()) add(DashboardTab(DashboardTabKey.MOD_SETTINGS, "Mod settings", Icons.Default.Code))
+        add(DashboardTab(DashboardTabKey.BACKUPS, "Backups", Icons.Default.Backup))
+    }
+    if (selectedTab > tabs.lastIndex) selectedTab = tabs.lastIndex
     Scaffold(topBar = { TopAppBar(title = {
         Column { Text(profile.name); Text("Luanti ${profile.engineVersion}", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
     }, navigationIcon = {
@@ -569,8 +625,8 @@ private fun Dashboard(
                 item { Spacer(Modifier.width(10.dp)) }
             }
             HorizontalDivider()
-            when (selectedTab) {
-                0 -> Overview(
+            when (tabs[selectedTab].key) {
+                DashboardTabKey.OVERVIEW -> Overview(
                     profile = profile,
                     runtime = runtime,
                     localPort = runtime?.localPort ?: profile.localPort?.takeUnless {
@@ -580,21 +636,23 @@ private fun Dashboard(
                     onStartPublicTunnel = onStartPublicTunnel,
                     onStopPublicTunnel = onStopPublicTunnel,
                 )
-                1 -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
+                DashboardTabKey.CONSOLE -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
                 }
-                2 -> PlayersPanel(runtime?.players?.toList().orEmpty(), running) { command ->
+                DashboardTabKey.PLAYERS -> PlayersPanel(players, runtime?.players.orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
                 }
-                3 -> ContentSummaryPanel(profile, installedPackages, onOpenContentLibrary, onOpenZipImport)
-                4 -> SettingsPanel(profile, installedPackages, onSaveServerSettings)
-                5 -> BackupPanel(profile, onCreateBackup)
+                DashboardTabKey.CONTENT -> ContentSummaryPanel(profile, installedPackages, onOpenContentLibrary, onOpenZipImport)
+                DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onSaveServerSettings)
+                DashboardTabKey.MOD_SETTINGS -> ModSettingsPanel(profile, modSettings, onSaveModSetting)
+                DashboardTabKey.BACKUPS -> BackupPanel(profile, onCreateBackup)
             }
         }
     }
 }
 
-private data class DashboardTab(val label: String, val icon: ImageVector)
+private enum class DashboardTabKey { OVERVIEW, CONSOLE, PLAYERS, CONTENT, SETTINGS, MOD_SETTINGS, BACKUPS }
+private data class DashboardTab(val key: DashboardTabKey, val label: String, val icon: ImageVector)
 
 @Composable
 private fun ConsolePanel(
@@ -625,7 +683,7 @@ private fun ConsolePanel(
                 value = command,
                 onValueChange = { command = it.take(240) },
                 label = { Text("Server command") },
-                placeholder = { Text("status, kick player, grant player all") },
+                placeholder = { Text("/status, /kick player, /grant player all") },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
                 enabled = running,
@@ -643,28 +701,53 @@ private fun ConsolePanel(
 
 @Composable
 private fun PlayersPanel(
-    players: List<String>,
+    players: List<ServerPlayerEntity>,
+    runtimePlayers: Set<String>,
     running: Boolean,
     onCommand: (String) -> Unit,
 ) {
-    if (players.isEmpty()) {
-        EmptySection(Icons.Default.Group, "No players online", "Connected players will appear here with moderation actions.")
+    val merged = remember(players, runtimePlayers) {
+        val byName = players.associateBy { it.name }.toMutableMap()
+        runtimePlayers.forEach { name ->
+            if (name.isNotBlank() && byName[name] == null) {
+                byName[name] = ServerPlayerEntity("", name, 0, 0, online = true, banned = false, admin = false)
+            }
+        }
+        byName.values.sortedWith(compareByDescending<ServerPlayerEntity> { it.online || it.name in runtimePlayers }.thenBy { it.name.lowercase() })
+    }
+    if (merged.isEmpty()) {
+        EmptySection(Icons.Default.Group, "No players yet", "Players will stay listed here after they join once, even when the server is stopped.")
     } else {
         LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(players) { player ->
+            items(merged) { player ->
+                val isOnline = player.online || player.name in runtimePlayers
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                     Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-                                Text(player.take(1).uppercase(), Modifier.padding(horizontal = 13.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
+                            Surface(shape = CircleShape, color = if (isOnline) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface) {
+                                Text(player.name.take(1).uppercase(), Modifier.padding(horizontal = 13.dp, vertical = 8.dp), fontWeight = FontWeight.Bold)
                             }
                             Spacer(Modifier.width(12.dp))
-                            Text(player, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                            Column(Modifier.weight(1f)) {
+                                Text(player.name, style = MaterialTheme.typography.titleMedium)
+                                Text(
+                                    buildList {
+                                        add(if (isOnline) "Online" else "Offline")
+                                        if (player.admin) add("Admin")
+                                        if (player.banned) add("Banned")
+                                    }.joinToString(" · "),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(enabled = running, onClick = { onCommand("kick ${player.safePlayerName()}") }) { Text("Kick") }
-                            FilledTonalButton(enabled = running, onClick = { onCommand("ban ${player.safePlayerName()}") }) { Text("Ban") }
-                            TextButton(enabled = running, onClick = { onCommand("grant ${player.safePlayerName()} all") }) { Text("Make admin") }
+                            val safe = player.name.safePlayerName()
+                            FilledTonalButton(enabled = running && isOnline, onClick = { onCommand("/kick $safe") }) { Text("Kick") }
+                            FilledTonalButton(enabled = running && !player.banned, onClick = { onCommand("/ban $safe") }) { Text("Ban") }
+                            FilledTonalButton(enabled = running && player.banned, onClick = { onCommand("/unban $safe") }) { Text("Unban") }
+                            TextButton(enabled = running && !player.admin, onClick = { onCommand("/grant $safe all") }) { Text("Make admin") }
+                            TextButton(enabled = running && player.admin, onClick = { onCommand("/revoke $safe all") }) { Text("Remove admin") }
                         }
                     }
                 }
@@ -1412,6 +1495,73 @@ private fun BackupPanel(
 }
 
 @Composable
+private fun ModSettingsPanel(
+    profile: ServerProfileEntity,
+    settings: List<ServerModSetting>,
+    onSave: (String, String, String, (Result<String>) -> Unit) -> Unit,
+) {
+    val canEdit = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
+    var values by remember(profile.id, settings) { mutableStateOf(settings.associate { it.key to it.value }) }
+    var message by remember(profile.id) { mutableStateOf<String?>(null) }
+    if (settings.isEmpty()) {
+        EmptySection(Icons.Default.Code, "No mod settings", "Installed mods do not expose settingtypes.txt options.")
+        return
+    }
+    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item {
+            Text("Mod settings", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "These values are written to minetest.conf from installed mod settingtypes.txt files. Restart the server to apply changes.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (!canEdit) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Text("Stop the server before changing mod settings.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
+        items(settings) { setting ->
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(setting.title, style = MaterialTheme.typography.titleMedium)
+                    Text("${setting.source} · ${setting.key} · ${setting.type}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (setting.description.isNotBlank()) {
+                        Text(setting.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (setting.type in setOf("bool", "boolean")) {
+                        Toggle(
+                            label = "Enabled",
+                            value = values[setting.key].equals("true", ignoreCase = true),
+                            enabled = canEdit,
+                        ) { checked -> values = values + (setting.key to checked.toString()) }
+                    } else {
+                        OutlinedTextField(
+                            value = values[setting.key].orEmpty(),
+                            onValueChange = { values = values + (setting.key to it.take(512)) },
+                            label = { Text("Value") },
+                            supportingText = { Text("Default: ${setting.defaultValue.ifBlank { "(empty)" }}") },
+                            enabled = canEdit,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    TextButton(
+                        enabled = canEdit,
+                        onClick = {
+                            onSave(profile.id, setting.key, values[setting.key].orEmpty()) { result ->
+                                message = result.fold({ it }, { it.message ?: "Save failed" })
+                            }
+                        },
+                    ) { Text("Save ${setting.title}") }
+                }
+            }
+        }
+        message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) } }
+    }
+}
+
+@Composable
 private fun SettingsPanel(
     profile: ServerProfileEntity,
     installedPackages: List<InstalledPackageEntity>,
@@ -1432,19 +1582,54 @@ private fun SettingsPanel(
     var pvp by remember(profile.id, profile.pvp) { mutableStateOf(profile.pvp) }
     var autoOffEnabled by remember(profile.id, profile.autoOffEnabled) { mutableStateOf(profile.autoOffEnabled) }
     var autoOffMinutes by remember(profile.id, profile.autoOffMinutes) { mutableStateOf(profile.autoOffMinutes.toString()) }
+    var serverDescription by remember(profile.id, profile.serverDescription) { mutableStateOf(profile.serverDescription) }
+    var motd by remember(profile.id, profile.motd) { mutableStateOf(profile.motd) }
+    var announceServer by remember(profile.id, profile.announceServer) { mutableStateOf(profile.announceServer) }
+    var defaultPrivileges by remember(profile.id, profile.defaultPrivileges) { mutableStateOf(profile.defaultPrivileges) }
+    var disallowEmptyPassword by remember(profile.id, profile.disallowEmptyPassword) { mutableStateOf(profile.disallowEmptyPassword) }
+    var enableRollback by remember(profile.id, profile.enableRollback) { mutableStateOf(profile.enableRollback) }
+    var timeSpeed by remember(profile.id, profile.timeSpeed) { mutableStateOf(profile.timeSpeed.toString()) }
+    var activeBlockRange by remember(profile.id, profile.activeBlockRange) { mutableStateOf(profile.activeBlockRange.toString()) }
+    var maxBlockSendDistance by remember(profile.id, profile.maxBlockSendDistance) { mutableStateOf(profile.maxBlockSendDistance.toString()) }
+    var maxBlockGenerateDistance by remember(profile.id, profile.maxBlockGenerateDistance) { mutableStateOf(profile.maxBlockGenerateDistance.toString()) }
+    var dedicatedServerStepMs by remember(profile.id, profile.dedicatedServerStepMs) { mutableStateOf(profile.dedicatedServerStepMs.toString()) }
+    var maxObjectsPerBlock by remember(profile.id, profile.maxObjectsPerBlock) { mutableStateOf(profile.maxObjectsPerBlock.toString()) }
+    var itemEntityTtl by remember(profile.id, profile.itemEntityTtl) { mutableStateOf(profile.itemEntityTtl.toString()) }
+    var maxPacketsPerIteration by remember(profile.id, profile.maxPacketsPerIteration) { mutableStateOf(profile.maxPacketsPerIteration.toString()) }
+    var mapgenLimit by remember(profile.id, profile.mapgenLimit) { mutableStateOf(profile.mapgenLimit.toString()) }
     var showVersions by remember { mutableStateOf(false) }
     var showGames by remember { mutableStateOf(false) }
+    var showMapgens by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     val parsedPlayers = maxPlayers.toIntOrNull()
     val parsedAutoOffMinutes = autoOffMinutes.toIntOrNull()
+    val parsedTimeSpeed = timeSpeed.toIntOrNull()
+    val parsedActiveBlockRange = activeBlockRange.toIntOrNull()
+    val parsedSendDistance = maxBlockSendDistance.toIntOrNull()
+    val parsedGenerateDistance = maxBlockGenerateDistance.toIntOrNull()
+    val parsedStepMs = dedicatedServerStepMs.toIntOrNull()
+    val parsedObjects = maxObjectsPerBlock.toIntOrNull()
+    val parsedItemTtl = itemEntityTtl.toIntOrNull()
+    val parsedPackets = maxPacketsPerIteration.toIntOrNull()
+    val parsedMapgenLimit = mapgenLimit.toIntOrNull()
     val selectedGameTitle = gamePackages.firstOrNull { it.packageKey == gameKey }?.title
         ?: gameKey
         ?: "No game selected"
     val valid = name.isNotBlank() &&
-        mapgen.isNotBlank() &&
+        mapgen in ServerRepository.MAPGENS &&
         parsedPlayers != null &&
         parsedPlayers in 1..100 &&
-        (!autoOffEnabled || (parsedAutoOffMinutes != null && parsedAutoOffMinutes in 1..1_440))
+        (!autoOffEnabled || (parsedAutoOffMinutes != null && parsedAutoOffMinutes in 1..1_440)) &&
+        parsedTimeSpeed != null && parsedTimeSpeed in 0..2_400 &&
+        parsedActiveBlockRange != null && parsedActiveBlockRange in 1..10 &&
+        parsedSendDistance != null && parsedSendDistance in 1..64 &&
+        parsedGenerateDistance != null && parsedGenerateDistance in 1..64 &&
+        parsedStepMs != null && parsedStepMs in 20..1_000 &&
+        parsedObjects != null && parsedObjects in 1..256 &&
+        parsedItemTtl != null && parsedItemTtl in -1..86_400 &&
+        parsedPackets != null && parsedPackets in 64..16_384 &&
+        parsedMapgenLimit != null && parsedMapgenLimit in 100..31_000
 
     LazyColumn(
         Modifier.fillMaxSize().padding(20.dp),
@@ -1490,15 +1675,11 @@ private fun SettingsPanel(
             item { Text("Install a game from ContentDB or ZIP Import before selecting one here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         item {
-            OutlinedTextField(
-                value = mapgen,
-                onValueChange = { mapgen = it.take(32) },
-                label = { Text("Map generator") },
-                placeholder = { Text("v7") },
-                singleLine = true,
+            FilledTonalButton(
+                onClick = { showMapgens = true },
                 enabled = canEdit,
-                modifier = Modifier.fillMaxWidth(),
-            )
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) { Text("Map generator: $mapgen") }
         }
         item {
             OutlinedTextField(
@@ -1527,22 +1708,91 @@ private fun SettingsPanel(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+        item { HorizontalDivider(Modifier.padding(vertical = 6.dp)) }
+        item {
+            FilledTonalButton(
+                onClick = { showAdvanced = !showAdvanced },
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) { Text(if (showAdvanced) "Hide advanced settings" else "Advanced settings") }
+        }
+        if (showAdvanced) {
+            item {
+                OutlinedTextField(
+                    value = serverDescription,
+                    onValueChange = { serverDescription = it.take(240) },
+                    label = { Text("Server description") },
+                    supportingText = { Text("Writes server_description") },
+                    enabled = canEdit,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item {
+                OutlinedTextField(
+                    value = motd,
+                    onValueChange = { motd = it.take(240) },
+                    label = { Text("MOTD") },
+                    supportingText = { Text("Message shown to players on join") },
+                    enabled = canEdit,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item { Toggle("Announce on Luanti server list", "Writes server_announce. Keep off for private LAN servers.", announceServer, canEdit) { announceServer = it } }
+            item {
+                OutlinedTextField(
+                    value = defaultPrivileges,
+                    onValueChange = { defaultPrivileges = it.take(120) },
+                    label = { Text("Default privileges") },
+                    supportingText = { Text("Comma-separated, for example interact,shout") },
+                    singleLine = true,
+                    enabled = canEdit,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            item { Toggle("Require passwords", "Writes disallow_empty_password", disallowEmptyPassword, canEdit) { disallowEmptyPassword = it } }
+            item { Toggle("Rollback recording", "Useful for moderation, costs storage and CPU.", enableRollback, canEdit) { enableRollback = it } }
+            item { NumberSetting("Time speed", "0 freezes time. Default 72.", timeSpeed, canEdit) { timeSpeed = it.filterSignedDigits(4) } }
+            item { NumberSetting("Active block range", "Simulation radius around players, 1-10.", activeBlockRange, canEdit) { activeBlockRange = it.filter(Char::isDigit).take(2) } }
+            item { NumberSetting("Block send distance", "Higher distance costs network/CPU, 1-64.", maxBlockSendDistance, canEdit) { maxBlockSendDistance = it.filter(Char::isDigit).take(2) } }
+            item { NumberSetting("Block generate distance", "World generation distance, 1-64.", maxBlockGenerateDistance, canEdit) { maxBlockGenerateDistance = it.filter(Char::isDigit).take(2) } }
+            item { NumberSetting("Server step ms", "Dedicated server tick interval, 20-1000 ms.", dedicatedServerStepMs, canEdit) { dedicatedServerStepMs = it.filter(Char::isDigit).take(4) } }
+            item { NumberSetting("Max objects per block", "Entity cap per mapblock, 1-256.", maxObjectsPerBlock, canEdit) { maxObjectsPerBlock = it.filter(Char::isDigit).take(3) } }
+            item { NumberSetting("Dropped item TTL seconds", "-1 disables automatic cleanup, 0-86400 seconds.", itemEntityTtl, canEdit) { itemEntityTtl = it.filterSignedDigits(6) } }
+            item { NumberSetting("Max packets per iteration", "Network throughput guard, 64-16384.", maxPacketsPerIteration, canEdit) { maxPacketsPerIteration = it.filter(Char::isDigit).take(5) } }
+            item { NumberSetting("Mapgen limit", "World generation limit, 100-31000.", mapgenLimit, canEdit) { mapgenLimit = it.filter(Char::isDigit).take(5) } }
+        }
         message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) } }
         item {
             Button(
                 onClick = {
                     onSaveSettings(
-                        profile.id,
-                        name,
-                        engineVersion,
-                        gameKey,
-                        mapgen,
-                        parsedPlayers ?: profile.maxPlayers,
-                        creative,
-                        damage,
-                        pvp,
-                        autoOffEnabled,
-                        parsedAutoOffMinutes ?: profile.autoOffMinutes,
+                        ServerProfileSettingsUpdate(
+                            profileId = profile.id,
+                            name = name,
+                            engineVersion = engineVersion,
+                            gameKey = gameKey,
+                            mapgen = mapgen,
+                            maxPlayers = parsedPlayers ?: profile.maxPlayers,
+                            creative = creative,
+                            damage = damage,
+                            pvp = pvp,
+                            autoOffEnabled = autoOffEnabled,
+                            autoOffMinutes = parsedAutoOffMinutes ?: profile.autoOffMinutes,
+                            serverDescription = serverDescription,
+                            motd = motd,
+                            announceServer = announceServer,
+                            defaultPrivileges = defaultPrivileges,
+                            disallowEmptyPassword = disallowEmptyPassword,
+                            enableRollback = enableRollback,
+                            timeSpeed = parsedTimeSpeed ?: profile.timeSpeed,
+                            activeBlockRange = parsedActiveBlockRange ?: profile.activeBlockRange,
+                            maxBlockSendDistance = parsedSendDistance ?: profile.maxBlockSendDistance,
+                            maxBlockGenerateDistance = parsedGenerateDistance ?: profile.maxBlockGenerateDistance,
+                            dedicatedServerStepMs = parsedStepMs ?: profile.dedicatedServerStepMs,
+                            maxObjectsPerBlock = parsedObjects ?: profile.maxObjectsPerBlock,
+                            itemEntityTtl = parsedItemTtl ?: profile.itemEntityTtl,
+                            maxPacketsPerIteration = parsedPackets ?: profile.maxPacketsPerIteration,
+                            mapgenLimit = parsedMapgenLimit ?: profile.mapgenLimit,
+                        ),
                     ) { result -> message = result.fold({ it }, { it.message ?: "Save failed" }) }
                 },
                 enabled = canEdit && valid,
@@ -1611,6 +1861,32 @@ private fun SettingsPanel(
                 }
             },
             confirmButton = { TextButton(onClick = { showGames = false }) { Text("Close") } },
+        )
+    }
+
+    if (showMapgens) {
+        AlertDialog(
+            onDismissRequest = { showMapgens = false },
+            title = { Text("Select map generator") },
+            text = {
+                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.heightIn(max = 420.dp)) {
+                    items(ServerRepository.MAPGENS) { option ->
+                        TextButton(
+                            onClick = {
+                                mapgen = option
+                                showMapgens = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(if (option == profile.mapgen) "$option · current" else option)
+                                Text(mapgenDescription(option), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showMapgens = false }) { Text("Close") } },
         )
     }
 }
