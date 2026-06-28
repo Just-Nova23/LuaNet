@@ -14,6 +14,11 @@ def main() -> None:
     args = parser.parse_args()
 
     cmake = args.source / "src" / "CMakeLists.txt"
+    android_header = args.source / "src" / "porting_android.h"
+    modern_android_dialogs = (
+        android_header.exists()
+        and "enum AndroidDialogState" in android_header.read_text()
+    )
     text = cmake.read_text()
     pattern = r"add_executable\(\$\{PROJECT_NAME\}server([^\n]*)\)"
     text, replacements = re.subn(
@@ -28,6 +33,9 @@ def main() -> None:
     injection = f"""
 \ttarget_sources(${{PROJECT_NAME}}server PRIVATE \"{args.bridge.as_posix()}\")
 \ttarget_include_directories(${{PROJECT_NAME}}server PRIVATE \"{(args.bridge.parent.parent / 'include').as_posix()}\")
+\tif({"ON" if modern_android_dialogs else "OFF"})
+\t\ttarget_compile_definitions(${{PROJECT_NAME}}server PRIVATE LUANET_ANDROID_DIALOG_ENUM)
+\tendif()
 \tif(ANDROID)
 \t\ttarget_link_libraries(${{PROJECT_NAME}}server log)
 \tendif()
@@ -58,7 +66,6 @@ def main() -> None:
     )
     cmake.write_text(text.replace(marker, injection + marker, 1))
 
-    android_header = args.source / "src" / "porting_android.h"
     if android_header.exists():
         header = android_header.read_text()
         header = re.sub(

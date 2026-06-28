@@ -60,7 +60,13 @@ void openURLAndroid(const std::string &) {}
 void shareFileAndroid(const std::string &) {}
 void setPlayingNowNotification(bool) {}
 void showInputDialog(const std::string &, const std::string &, const std::string &, int) {}
+#ifdef LUANET_ANDROID_DIALOG_ENUM
+AndroidDialogType getLastInputDialogType() { return TEXT_INPUT; }
+AndroidDialogState getInputDialogState() { return DIALOG_CANCELED; }
+int getInputDialogSelection() { return -1; }
+#else
 int getInputDialogState() { return 0; }
+#endif
 std::string getInputDialogValue() { return {}; }
 void showTextInputDialog(const std::string &, const std::string &, int) {}
 void showComboBoxDialog(const std::string *, s32, s32) {}
