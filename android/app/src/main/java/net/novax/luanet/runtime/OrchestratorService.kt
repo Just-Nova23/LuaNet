@@ -121,7 +121,9 @@ class OrchestratorService : Service() {
         val packages = repository.packages(profile.id)
         val consoleAdmin = "ln_admin_${profile.id.take(8).filter { it.isLetterOrDigit() }}"
         val consolePassword = profile.id.replace("-", "").take(32).ifBlank { "luanet" }
-        writeLuaNetRuntimeMod(File(root, "mods"), consoleAdmin, consolePassword)
+        val consoleModName = "lnet_console_${profile.id.take(8).filter { it.isLetterOrDigit() }}"
+        cleanupLuaNetRuntimeMods(root, world, consoleModName)
+        writeLuaNetRuntimeMod(File(world, "worldmods"), consoleModName, consoleAdmin, consolePassword)
         writeWorldConfig(world, profile.gameKey, packages, File(root, "mods"))
         val config = File(root, "minetest.conf")
         val customSettings = repository.configSettings(profile.id).associate { it.key to it.value }
@@ -559,11 +561,31 @@ class OrchestratorService : Service() {
         file.writeText(lines.joinToString(separator = "\n", postfix = "\n"))
     }
 
-    private fun writeLuaNetRuntimeMod(modsRoot: File, consoleAdmin: String, consolePassword: String) {
-        val runtime = File(modsRoot, "luanet_runtime").apply { mkdirs() }
+    private fun cleanupLuaNetRuntimeMods(root: File, world: File, activeModName: String) {
+        listOf(File(root, "mods"), File(world, "worldmods")).forEach { parent ->
+            parent.listFiles()?.filter { it.isDirectory }?.forEach { candidate ->
+                val isOldRuntimeName = candidate.name == "luanet_runtime"
+                val isOldGeneratedName = candidate.name.startsWith("lnet_console_") && candidate.name != activeModName
+                if ((isOldRuntimeName || isOldGeneratedName) && candidate.isLuaNetInternalRuntimeMod()) {
+                    candidate.deleteRecursively()
+                }
+            }
+        }
+    }
+
+    private fun File.isLuaNetInternalRuntimeMod(): Boolean {
+        if (File(this, ".luanet-internal").isFile) return true
+        val conf = File(this, "mod.conf").takeIf { it.isFile }?.readText().orEmpty()
+        val init = File(this, "init.lua").takeIf { it.isFile }?.readText().orEmpty()
+        return "Internal LuaNet server bootstrap" in conf || "[LuaNet] Console admin ready" in init
+    }
+
+    private fun writeLuaNetRuntimeMod(worldModsRoot: File, modName: String, consoleAdmin: String, consolePassword: String) {
+        val runtime = File(worldModsRoot, modName).apply { mkdirs() }
+        File(runtime, ".luanet-internal").writeText("runtime-mod\n")
         File(runtime, "mod.conf").writeText(
             """
-            name = luanet_runtime
+            name = $modName
             description = Internal LuaNet server bootstrap
             depends =
             """.trimIndent() + "\n",
@@ -617,7 +639,6 @@ class OrchestratorService : Service() {
         preserved["backend"] = preserved["backend"] ?: "sqlite3"
         gameKey?.substringAfter('/')?.takeIf { it.isNotBlank() }?.let { preserved["gameid"] = it }
         preserved.keys.filter { it.startsWith("load_mod_") }.toList().forEach { preserved.remove(it) }
-        preserved["load_mod_luanet_runtime"] = "true"
         enabledModNames(packages, modsRoot).forEach { modName ->
             preserved["load_mod_$modName"] = "true"
         }
