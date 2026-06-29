@@ -42,6 +42,9 @@ fun webClientIdFromGoogleServices(): String {
 val googleWebClientId = providers.gradleProperty("LUANET_GOOGLE_WEB_CLIENT_ID")
     .orElse(providers.environmentVariable("LUANET_GOOGLE_WEB_CLIENT_ID"))
     .orElse(webClientIdFromGoogleServices())
+val debugControlPlaneUrl = providers.gradleProperty("LUANET_DEBUG_CONTROL_PLANE_URL")
+    .orElse(providers.environmentVariable("LUANET_DEBUG_CONTROL_PLANE_URL"))
+    .orElse("https://api.luanet.novaxhosting.com")
 val admobAppId = providers.gradleProperty("LUANET_ADMOB_APP_ID")
     .orElse(providers.environmentVariable("LUANET_ADMOB_APP_ID"))
     .orElse("ca-app-pub-1122211074280550~5618156743")
@@ -86,7 +89,7 @@ android {
             if (luanetDebugKeystore?.isFile == true) {
                 signingConfig = signingConfigs.getByName("luanetDebug")
             }
-            buildConfigField("String", "CONTROL_PLANE_URL", "\"http://10.0.2.2:8080\"")
+            buildConfigField("String", "CONTROL_PLANE_URL", "\"${debugControlPlaneUrl.get()}\"")
         }
         release {
             isMinifyEnabled = true

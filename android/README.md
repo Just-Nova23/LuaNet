@@ -73,6 +73,10 @@ Release builds should provide:
 - `LUANET_ADMOB_APP_ID`;
 - `LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID`.
 
+Debug APKs default to the NovaX production control plane so they work on real phones.
+Use `LUANET_DEBUG_CONTROL_PLANE_URL=http://10.0.2.2:8080` only when testing against a
+backend running on the emulator host machine.
+
 The account screen does not expose development bearer tokens. Production and local Firebase
 testing both use Firebase ID tokens.
 
