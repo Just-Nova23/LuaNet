@@ -101,7 +101,14 @@ class OrchestratorService : Service() {
             RuntimeRegistry.update(profileId) { RuntimeSnapshot(profileId, "FREE_LIMIT", -1, 0) }
             return
         }
-        val slot = (0 until 5).firstOrNull { candidate -> sessions.values.none { it.slot == candidate } } ?: return
+        val slot = waitForReusableSlot(profile.id) ?: run {
+            val text = "No isolated engine slot is ready. Wait for the previous Luanti stop to finish, then start again."
+            repository.updateRuntime(profileId, ServerState.CRASHED, null)
+            RuntimeRegistry.update(profileId) {
+                RuntimeSnapshot(profileId, "CRASHED", -1, 0, logs = listOf(text))
+            }
+            return
+        }
         val port = 30_000 + slot
         val release = EngineCatalog.find(profile.engineVersion) ?: return
         if (!hasBundledLibrary(release.libraryName)) {
@@ -228,7 +235,9 @@ class OrchestratorService : Service() {
                 updateNotification()
             }
             override fun onServiceDisconnected(name: ComponentName?) {
-                engineEnded(profileId, "CRASHED")
+                if (sessions.containsKey(profileId)) {
+                    engineEnded(profileId, "CRASHED")
+                }
             }
         }
         bindService(Intent(this, slotClass(slot)), connection, Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT)
@@ -257,9 +266,10 @@ class OrchestratorService : Service() {
     }
 
     private fun engineEnded(profileId: String, state: String) {
+        val engine = sessions.remove(profileId)
+        if (engine == null && state == "CRASHED") return
         stopPublicTunnel(profileId)
         logcatTails.remove(profileId)?.cancel()
-        val engine = sessions.remove(profileId)
         if (engine != null) runCatching { unbindService(engine.connection) }
         val serverState = runCatching { ServerState.valueOf(state) }.getOrDefault(ServerState.CRASHED)
         scope.launch { repository.updateRuntime(profileId, serverState, null) }
@@ -486,6 +496,35 @@ class OrchestratorService : Service() {
             delay(250)
         }
         return enginePid(slot)
+    }
+
+    private suspend fun waitForReusableSlot(profileId: String): Int? {
+        var announced = false
+        repeat(40) {
+            availableReusableSlot()?.let { return it }
+            if (!announced) {
+                announced = true
+                RuntimeRegistry.update(profileId) { previous ->
+                    val logs = (
+                        previous?.logs.orEmpty() +
+                            "Waiting for the previous Luanti engine process to exit before reusing an isolated slot."
+                        ).takeLast(2_000)
+                    previous?.copy(state = "STARTING", localPort = 0, logs = logs) ?: RuntimeSnapshot(
+                        profileId = profileId,
+                        state = "STARTING",
+                        slot = -1,
+                        localPort = 0,
+                        logs = logs,
+                    )
+                }
+            }
+            delay(250)
+        }
+        return availableReusableSlot()
+    }
+
+    private fun availableReusableSlot(): Int? = (0 until 5).firstOrNull { candidate ->
+        sessions.values.none { it.slot == candidate } && enginePid(candidate) == null
     }
 
     private fun enginePid(slot: Int): Int? {

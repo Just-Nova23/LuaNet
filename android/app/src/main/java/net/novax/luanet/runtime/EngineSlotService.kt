@@ -7,15 +7,18 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import kotlin.concurrent.thread
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.system.exitProcess
 
 abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
     private val executor = Executors.newSingleThreadExecutor()
     private val running = AtomicBoolean(false)
     private val ready = AtomicBoolean(false)
+    private val processExitScheduled = AtomicBoolean(false)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var callback: Messenger? = null
     private var bridge: NativeEngineBridge? = null
@@ -79,7 +82,16 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
                 bridge = null
                 mainHandler.removeCallbacksAndMessages(null)
                 stopSelf()
+                scheduleProcessExitAfterCleanNativeReturn()
             }
+        }
+    }
+
+    private fun scheduleProcessExitAfterCleanNativeReturn() {
+        if (!processExitScheduled.compareAndSet(false, true)) return
+        thread(name = "LuaNetEngineProcessExit", isDaemon = false) {
+            runCatching { Thread.sleep(PROCESS_EXIT_DELAY_MS) }
+            exitProcess(0)
         }
     }
 
@@ -108,6 +120,7 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
 
     companion object {
         private const val READY_FALLBACK_MS = 8_000L
+        private const val PROCESS_EXIT_DELAY_MS = 250L
     }
 }
 
