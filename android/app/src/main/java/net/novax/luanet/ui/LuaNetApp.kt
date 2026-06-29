@@ -57,8 +57,10 @@ import androidx.compose.material.icons.filled.AddCircle as FolderZip
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Paid
 import androidx.compose.material.icons.filled.Person as Group
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Share as Lan
@@ -144,6 +146,8 @@ private sealed interface Destination {
     data object Servers : Destination
     data object Create : Destination
     data object Account : Destination
+    data object Premium : Destination
+    data object Credits : Destination
     data class Dashboard(val id: String) : Destination
     data class ContentLibrary(val id: String) : Destination
     data class ZipImport(val id: String) : Destination
@@ -171,11 +175,12 @@ fun LuaNetApp(viewModel: MainViewModel) {
             onCreate = { destination = Destination.Create },
             onOpen = { destination = Destination.Dashboard(it) },
             onOpenAccount = { destination = Destination.Account },
+            onOpenPremium = { destination = Destination.Premium },
+            onOpenCredits = { destination = Destination.Credits },
         )
         Destination.Account -> AccountScreen(
             account = account,
             onBack = { destination = Destination.Servers },
-            onSyncEntitlement = viewModel::syncEntitlement,
             onSignInEmail = viewModel::signInWithEmail,
             onCreateEmailAccount = viewModel::createEmailAccount,
             onGoogleSignIn = viewModel::signInWithGoogle,
@@ -183,8 +188,16 @@ fun LuaNetApp(viewModel: MainViewModel) {
             onSendVerificationEmail = viewModel::sendVerificationEmail,
             onSignOut = viewModel::signOut,
             onDeleteAccount = viewModel::deleteAccount,
+        )
+        Destination.Premium -> PremiumScreen(
+            account = account,
+            onBack = { destination = Destination.Servers },
+            onSyncEntitlement = viewModel::syncEntitlement,
             onPurchasePremium = viewModel::purchasePremium,
             onRestorePremium = viewModel::restorePremium,
+        )
+        Destination.Credits -> CreditsScreen(
+            onBack = { destination = Destination.Servers },
         )
         Destination.Create -> CreateServer(
             onBack = { destination = Destination.Servers },
@@ -320,6 +333,8 @@ private fun ServerList(
     onCreate: () -> Unit,
     onOpen: (String) -> Unit,
     onOpenAccount: () -> Unit,
+    onOpenPremium: () -> Unit,
+    onOpenCredits: () -> Unit,
 ) {
     val activeCount = profiles.count { it.state in setOf(ServerState.STARTING, ServerState.RUNNING) }
     Scaffold(
@@ -335,6 +350,12 @@ private fun ServerList(
                 }
             }
         }, actions = {
+            IconButton(onClick = onOpenPremium) {
+                Icon(Icons.Default.Paid, "Premium")
+            }
+            IconButton(onClick = onOpenCredits) {
+                Icon(Icons.Default.Info, "Credits")
+            }
             IconButton(onClick = onOpenAccount) {
                 Icon(Icons.Default.AccountCircle, "Account")
             }
@@ -425,7 +446,6 @@ private fun ServerList(
 private fun AccountScreen(
     account: AccountState,
     onBack: () -> Unit,
-    onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
     onSignInEmail: (String, String, (Result<String>) -> Unit) -> Unit,
     onCreateEmailAccount: (String, String, (Result<String>) -> Unit) -> Unit,
     onGoogleSignIn: (Activity, (Result<String>) -> Unit) -> Unit,
@@ -433,8 +453,6 @@ private fun AccountScreen(
     onSendVerificationEmail: ((Result<String>) -> Unit) -> Unit,
     onSignOut: () -> Unit,
     onDeleteAccount: ((Result<String>) -> Unit) -> Unit,
-    onPurchasePremium: (Activity, Boolean, (Result<String>) -> Unit) -> Unit,
-    onRestorePremium: ((Result<String>) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
     var email by remember { mutableStateOf("") }
@@ -456,7 +474,7 @@ private fun AccountScreen(
                 title = {
                     Column {
                         Text("Account")
-                        Text("NovaX public tunnel and Premium", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("NovaX sign-in and privacy", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 },
                 navigationIcon = {
@@ -600,42 +618,6 @@ private fun AccountScreen(
                         }
                     }
                 }
-                item {
-                    Card {
-                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Premium", style = MaterialTheme.typography.titleLarge)
-                            Text("€1.99/month or €19.10/year. NovaX enables Premium only after server-side Play verification.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(
-                                    onClick = {
-                                        val currentActivity = activity
-                                        if (currentActivity == null) message = "Purchase requires an active app screen"
-                                        else onPurchasePremium(currentActivity, false) { result -> message = result.fold({ it }, { it.message ?: "Purchase failed" }) }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Monthly") }
-                                Button(
-                                    onClick = {
-                                        val currentActivity = activity
-                                        if (currentActivity == null) message = "Purchase requires an active app screen"
-                                        else onPurchasePremium(currentActivity, true) { result -> message = result.fold({ it }, { it.message ?: "Purchase failed" }) }
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Yearly") }
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                FilledTonalButton(
-                                    onClick = { onRestorePremium { result -> message = result.fold({ it }, { it.message ?: "Restore failed" }) } },
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Restore") }
-                                FilledTonalButton(
-                                    onClick = { onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) } },
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Sync") }
-                            }
-                        }
-                    }
-                }
             }
             message?.let {
                 item {
@@ -662,6 +644,281 @@ private fun AccountScreen(
                 TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
             },
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PremiumScreen(
+    account: AccountState,
+    onBack: () -> Unit,
+    onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
+    onPurchasePremium: (Activity, Boolean, (Result<String>) -> Unit) -> Unit,
+    onRestorePremium: ((Result<String>) -> Unit) -> Unit,
+) {
+    val context = LocalContext.current
+    val activity = context.findActivity()
+    var message by remember { mutableStateOf<String?>(null) }
+    val signedIn = account.signedIn && account.tokenConfigured
+    val messageIsError = message?.let {
+        it.contains("failed", ignoreCase = true) ||
+            it.contains("sign in", ignoreCase = true) ||
+            it.contains("not configured", ignoreCase = true)
+    } == true
+    fun purchase(yearly: Boolean) {
+        val currentActivity = activity
+        if (!signedIn) {
+            message = "Sign in from Account before buying Premium"
+        } else if (currentActivity == null) {
+            message = "Purchase requires an active app screen"
+        } else {
+            onPurchasePremium(currentActivity, yearly) { result ->
+                message = result.fold({ it }, { it.message ?: "Purchase failed" })
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Premium")
+                        Text("Public hosting without ads or time limits", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface) {
+                                Icon(Icons.Default.Paid, null, Modifier.padding(10.dp).size(28.dp), tint = MaterialTheme.colorScheme.primary)
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("LuaNet Premium", style = MaterialTheme.typography.headlineSmall)
+                                Text(
+                                    if (account.tier.name == "PREMIUM") "Active on this NovaX account" else "Upgrade when public hosting needs to stay online",
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            AccountStatusPill("Current tier", account.tier.name.lowercase().replaceFirstChar(Char::uppercase), Modifier.weight(1f))
+                            AccountStatusPill("Account", if (signedIn) "Signed in" else "Required", Modifier.weight(1f), error = !signedIn)
+                        }
+                        account.expiresAt?.let {
+                            Text("Expires: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
+                    }
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    PremiumPlanCard(
+                        title = "Monthly",
+                        price = "€1.99",
+                        subtitle = "per month",
+                        modifier = Modifier.weight(1f),
+                        onClick = { purchase(false) },
+                        enabled = signedIn,
+                    )
+                    PremiumPlanCard(
+                        title = "Yearly",
+                        price = "€19.10",
+                        subtitle = "per year",
+                        modifier = Modifier.weight(1f),
+                        onClick = { purchase(true) },
+                        enabled = signedIn,
+                    )
+                }
+            }
+            item {
+                Card {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("Included", style = MaterialTheme.typography.titleLarge)
+                        FeatureLine(Icons.Default.Cloud, "Five active public tunnels", "Limit is shared by the NovaX account across devices")
+                        HorizontalDivider()
+                        FeatureLine(Icons.Default.CheckCircle, "No public-start interstitial", "Ads remain only on Free public starts")
+                        HorizontalDivider()
+                        FeatureLine(Icons.Default.Public, "No four-hour lease limit", "Premium leases renew while entitlement is valid")
+                    }
+                }
+            }
+            item {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilledTonalButton(
+                        onClick = { onRestorePremium { result -> message = result.fold({ it }, { it.message ?: "Restore failed" }) } },
+                        enabled = signedIn,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Restore") }
+                    FilledTonalButton(
+                        onClick = { onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) } },
+                        enabled = signedIn,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Sync") }
+                }
+            }
+            if (!signedIn) {
+                item {
+                    Text(
+                        "Open Account and sign in with Google, GitHub or email before buying or restoring Premium.",
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+            message?.let {
+                item {
+                    Text(
+                        it,
+                        color = if (messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PremiumPlanCard(
+    title: String,
+    price: String,
+    subtitle: String,
+    modifier: Modifier,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Card(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(price, style = MaterialTheme.typography.headlineMedium)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CreditsScreen(onBack: () -> Unit) {
+    val context = LocalContext.current
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Column {
+                        Text("Credits")
+                        Text("Project links and legal contact", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                },
+                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+            )
+        },
+    ) { padding ->
+        LazyColumn(
+            Modifier.fillMaxSize().padding(padding).padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("LuaNet", style = MaterialTheme.typography.headlineMedium)
+                        Text(
+                            "Android hosting for Luanti, with optional NovaX public UDP tunnel. App code is Apache-2.0; Luanti engine fork/bridge notices stay under their upstream licenses.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Language,
+                    title = "Website",
+                    detail = "luanet.novaxhosting.com",
+                    url = "https://luanet.novaxhosting.com",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Code,
+                    title = "GitHub",
+                    detail = "github.com/Just-Nova23/LuaNet",
+                    url = "https://github.com/Just-Nova23/LuaNet",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Forum,
+                    title = "Contact",
+                    detail = "luanet@novaxhosting.com",
+                    url = "mailto:luanet@novaxhosting.com",
+                    context = context,
+                )
+            }
+            item {
+                Text(
+                    "LuaNet does not upload worlds, chat or player names to NovaX. The control plane stores only account, device, tunnel lease, billing entitlement and anti-abuse metadata.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CreditLinkCard(
+    icon: ImageVector,
+    title: String,
+    detail: String,
+    url: String,
+    context: Context,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
+                    Icon(icon, null, Modifier.padding(10.dp).size(24.dp), tint = MaterialTheme.colorScheme.primary)
+                }
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium)
+                    Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilledTonalButton(
+                    onClick = { openExternalLink(context, url) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.OpenInNew, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Open")
+                }
+                FilledTonalButton(
+                    onClick = { copy(context, detail) },
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(Icons.Default.ContentCopy, null, Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Copy")
+                }
+            }
+        }
     }
 }
 
