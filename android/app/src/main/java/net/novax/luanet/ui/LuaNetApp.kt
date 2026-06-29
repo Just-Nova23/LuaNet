@@ -866,7 +866,7 @@ private fun PlayerActionsDialog(
     var actionMessage by remember(player.name) { mutableStateOf<String?>(null) }
     val sendRunningCommand: (String) -> Unit = { command ->
         onCommand(command)
-        actionMessage = "Command sent. LuaNet will update this player only after Luanti confirms it in Console."
+        actionMessage = "Command sent to Luanti. If it fails, LuaNet will keep this player unchanged and the error will appear in Console."
     }
     val runOfflineAction: (((Result<String>) -> Unit) -> Unit) -> Unit = { action ->
         actionMessage = "Applying offline change..."
@@ -895,7 +895,8 @@ private fun PlayerActionsDialog(
                             color = if (
                                 message.contains("failed", ignoreCase = true) ||
                                 message.contains("does not", ignoreCase = true) ||
-                                message.contains("must join", ignoreCase = true)
+                                message.contains("must join", ignoreCase = true) ||
+                                message.contains("stop the server", ignoreCase = true)
                             ) {
                                 MaterialTheme.colorScheme.error
                             } else {
@@ -937,7 +938,7 @@ private fun PlayerActionsDialog(
                 if (running && !isOnline) {
                     item {
                         Text(
-                            "Ban requires the player to be online because Luanti stores IP bans. Admin changes can still target offline players if they already have an auth record.",
+                            "Ban requires the player to be online because Luanti stores IP bans. Admin changes for offline players require stopping the server so LuaNet can edit auth.sqlite safely.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -947,15 +948,19 @@ private fun PlayerActionsDialog(
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         PlayerActionButton("Make admin", safe.isNotBlank() && !player.admin) {
-                            if (running) {
+                            if (running && isOnline) {
                                 sendRunningCommand("/grant $safe all")
+                            } else if (running) {
+                                actionMessage = "Stop the server before changing admin privileges for an offline player. LuaNet will not fake this action with a command that Luanti may reject."
                             } else {
                                 runOfflineAction { onSetAdminOffline(profileId, safe, true, it) }
                             }
                         }
                         PlayerActionButton("Remove admin", safe.isNotBlank() && player.admin) {
-                            if (running) {
+                            if (running && isOnline) {
                                 sendRunningCommand("/revoke $safe all")
+                            } else if (running) {
+                                actionMessage = "Stop the server before changing admin privileges for an offline player. LuaNet will not fake this action with a command that Luanti may reject."
                             } else {
                                 runOfflineAction { onSetAdminOffline(profileId, safe, false, it) }
                             }
