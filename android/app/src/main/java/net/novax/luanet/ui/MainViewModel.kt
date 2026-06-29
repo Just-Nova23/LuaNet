@@ -79,6 +79,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun installedPackages(profileId: String) = repository.observePackages(profileId)
     fun players(profileId: String) = repository.observePlayers(profileId)
+    fun advancedSettings(profileId: String) = repository.observeConfigSettings(profileId)
     fun modSettings(profileId: String) = repository.observeModSettings(profileId)
 
     fun saveModSetting(profileId: String, key: String, value: String, onResult: (Result<String>) -> Unit) {
@@ -86,6 +87,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             onResult(runCatching {
                 repository.saveModSetting(profileId, key, value)
                 "Mod setting saved. Restart the server to apply it."
+            })
+        }
+    }
+
+    fun saveAdvancedSetting(profileId: String, key: String, value: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                repository.saveConfigSetting(profileId, key, value)
+                "Advanced setting saved. Restart the server to apply it."
             })
         }
     }

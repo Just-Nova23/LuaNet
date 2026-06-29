@@ -122,6 +122,7 @@ import io.noties.markwon.Markwon
 import net.novax.luanet.data.db.ServerProfileEntity
 import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.data.db.ServerPlayerEntity
+import net.novax.luanet.data.db.ServerConfigSettingEntity
 import net.novax.luanet.R
 import net.novax.luanet.data.ServerModSetting
 import net.novax.luanet.data.ServerProfileSettingsUpdate
@@ -180,16 +181,19 @@ fun LuaNetApp(viewModel: MainViewModel) {
         is Destination.Dashboard -> {
             val installedPackages by viewModel.installedPackages(current.id).collectAsStateWithLifecycle(emptyList())
             val players by viewModel.players(current.id).collectAsStateWithLifecycle(emptyList())
+            val advancedSettings by viewModel.advancedSettings(current.id).collectAsStateWithLifecycle(emptyList())
             val modSettings by viewModel.modSettings(current.id).collectAsStateWithLifecycle(emptyList())
             Dashboard(
                 profile = profiles.firstOrNull { it.id == current.id },
                 installedPackages = installedPackages,
                 players = players,
+                advancedSettings = advancedSettings,
                 modSettings = modSettings,
                 onBack = { destination = Destination.Servers },
                 onOpenContentLibrary = { destination = Destination.ContentLibrary(current.id) },
                 onOpenZipImport = { destination = Destination.ZipImport(current.id) },
                 onSaveServerSettings = viewModel::updateServerSettings,
+                onSaveAdvancedSetting = viewModel::saveAdvancedSetting,
                 onSaveModSetting = viewModel::saveModSetting,
                 onCreateBackup = viewModel::createBackup,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
@@ -577,11 +581,13 @@ private fun Dashboard(
     profile: ServerProfileEntity?,
     installedPackages: List<InstalledPackageEntity>,
     players: List<ServerPlayerEntity>,
+    advancedSettings: List<ServerConfigSettingEntity>,
     modSettings: List<ServerModSetting>,
     onBack: () -> Unit,
     onOpenContentLibrary: () -> Unit,
     onOpenZipImport: () -> Unit,
     onSaveServerSettings: ServerSettingsSaver,
+    onSaveAdvancedSetting: (String, String, String, (Result<String>) -> Unit) -> Unit,
     onSaveModSetting: (String, String, String, (Result<String>) -> Unit) -> Unit,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
@@ -599,6 +605,7 @@ private fun Dashboard(
         add(DashboardTab(DashboardTabKey.PLAYERS, "Players", Icons.Default.Group))
         add(DashboardTab(DashboardTabKey.CONTENT, "Content", Icons.Default.FolderZip))
         add(DashboardTab(DashboardTabKey.SETTINGS, "Settings", Icons.Default.Settings))
+        add(DashboardTab(DashboardTabKey.ADVANCED_SETTINGS, "Advanced", Icons.Default.Memory))
         if (modSettings.isNotEmpty()) add(DashboardTab(DashboardTabKey.MOD_SETTINGS, "Mod settings", Icons.Default.Code))
         add(DashboardTab(DashboardTabKey.BACKUPS, "Backups", Icons.Default.Backup))
     }
@@ -645,6 +652,7 @@ private fun Dashboard(
                 }
                 DashboardTabKey.CONTENT -> ContentSummaryPanel(profile, installedPackages, onOpenContentLibrary, onOpenZipImport)
                 DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onSaveServerSettings)
+                DashboardTabKey.ADVANCED_SETTINGS -> AdvancedSettingsPanel(profile, advancedSettings, onSaveServerSettings, onSaveAdvancedSetting)
                 DashboardTabKey.MOD_SETTINGS -> ModSettingsPanel(profile, modSettings, onSaveModSetting)
                 DashboardTabKey.BACKUPS -> BackupPanel(profile, onCreateBackup)
             }
@@ -652,7 +660,7 @@ private fun Dashboard(
     }
 }
 
-private enum class DashboardTabKey { OVERVIEW, CONSOLE, PLAYERS, CONTENT, SETTINGS, MOD_SETTINGS, BACKUPS }
+private enum class DashboardTabKey { OVERVIEW, CONSOLE, PLAYERS, CONTENT, SETTINGS, ADVANCED_SETTINGS, MOD_SETTINGS, BACKUPS }
 private data class DashboardTab(val key: DashboardTabKey, val label: String, val icon: ImageVector)
 
 @Composable
@@ -1686,6 +1694,297 @@ private fun ModSettingsPanel(
     }
 }
 
+private data class AdvancedEngineSetting(
+    val key: String,
+    val title: String,
+    val detail: String,
+    val defaultValue: String,
+    val kind: AdvancedSettingKind,
+)
+
+private enum class AdvancedSettingKind { TEXT, NUMBER, BOOL }
+
+private val advancedEngineSettings = listOf(
+    AdvancedEngineSetting(
+        "max_simultaneous_block_sends_per_client",
+        "Simultaneous block sends",
+        "Maximum mapblock sends per client. Lower values reduce spikes on phones.",
+        "40",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "server_unload_unused_data_timeout",
+        "Unload unused server data",
+        "Seconds before Luanti unloads unused map data. Lower saves memory.",
+        "29",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "sqlite_synchronous",
+        "SQLite synchronous mode",
+        "0 is fastest/riskier, 1 balanced, 2 safest. LuaNet default keeps Luanti default 2.",
+        "2",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "max_forceloaded_blocks",
+        "Max forceloaded blocks",
+        "Limits always-loaded blocks. Lower values protect phone memory and battery.",
+        "16",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "chat_message_max_size",
+        "Chat message max size",
+        "Maximum chat message length accepted by the server.",
+        "500",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "chat_message_limit_per_10sec",
+        "Chat messages per 10 sec",
+        "Anti-spam limit before Luanti starts refusing chat messages.",
+        "8.0",
+        AdvancedSettingKind.TEXT,
+    ),
+    AdvancedEngineSetting(
+        "chat_message_limit_trigger_kick",
+        "Chat kick threshold",
+        "How many chat limit violations trigger an automatic kick.",
+        "50",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "emergequeue_limit_total",
+        "Total emerge queue limit",
+        "Global queued mapblock load/generation limit.",
+        "1024",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "emergequeue_limit_diskonly",
+        "Disk emerge queue per player",
+        "Per-player queued mapblocks loaded from disk.",
+        "128",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "emergequeue_limit_generate",
+        "Generate queue per player",
+        "Per-player queued mapblocks generated from mapgen.",
+        "128",
+        AdvancedSettingKind.NUMBER,
+    ),
+    AdvancedEngineSetting(
+        "enable_mapgen_debug_info",
+        "Mapgen debug info",
+        "Verbose mapgen diagnostics. Keep off unless debugging terrain generation.",
+        "false",
+        AdvancedSettingKind.BOOL,
+    ),
+)
+
+@Composable
+private fun AdvancedSettingsPanel(
+    profile: ServerProfileEntity,
+    settings: List<ServerConfigSettingEntity>,
+    onSaveSettings: ServerSettingsSaver,
+    onSaveConfig: (String, String, String, (Result<String>) -> Unit) -> Unit,
+) {
+    val canEdit = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
+    var serverDescription by remember(profile.id, profile.serverDescription) { mutableStateOf(profile.serverDescription) }
+    var motd by remember(profile.id, profile.motd) { mutableStateOf(profile.motd) }
+    var announceServer by remember(profile.id, profile.announceServer) { mutableStateOf(profile.announceServer) }
+    var defaultPrivileges by remember(profile.id, profile.defaultPrivileges) { mutableStateOf(profile.defaultPrivileges) }
+    var disallowEmptyPassword by remember(profile.id, profile.disallowEmptyPassword) { mutableStateOf(profile.disallowEmptyPassword) }
+    var enableRollback by remember(profile.id, profile.enableRollback) { mutableStateOf(profile.enableRollback) }
+    var timeSpeed by remember(profile.id, profile.timeSpeed) { mutableStateOf(profile.timeSpeed.toString()) }
+    var activeBlockRange by remember(profile.id, profile.activeBlockRange) { mutableStateOf(profile.activeBlockRange.toString()) }
+    var maxBlockSendDistance by remember(profile.id, profile.maxBlockSendDistance) { mutableStateOf(profile.maxBlockSendDistance.toString()) }
+    var maxBlockGenerateDistance by remember(profile.id, profile.maxBlockGenerateDistance) { mutableStateOf(profile.maxBlockGenerateDistance.toString()) }
+    var dedicatedServerStepMs by remember(profile.id, profile.dedicatedServerStepMs) { mutableStateOf(profile.dedicatedServerStepMs.toString()) }
+    var maxObjectsPerBlock by remember(profile.id, profile.maxObjectsPerBlock) { mutableStateOf(profile.maxObjectsPerBlock.toString()) }
+    var itemEntityTtl by remember(profile.id, profile.itemEntityTtl) { mutableStateOf(profile.itemEntityTtl.toString()) }
+    var maxPacketsPerIteration by remember(profile.id, profile.maxPacketsPerIteration) { mutableStateOf(profile.maxPacketsPerIteration.toString()) }
+    var mapgenLimit by remember(profile.id, profile.mapgenLimit) { mutableStateOf(profile.mapgenLimit.toString()) }
+    var configValues by remember(profile.id, settings) {
+        mutableStateOf(advancedEngineSettings.associate { setting ->
+            setting.key to (settings.firstOrNull { it.key == setting.key }?.value ?: setting.defaultValue)
+        })
+    }
+    var message by remember(profile.id) { mutableStateOf<String?>(null) }
+
+    val parsedTimeSpeed = timeSpeed.toIntOrNull()
+    val parsedActiveBlockRange = activeBlockRange.toIntOrNull()
+    val parsedSendDistance = maxBlockSendDistance.toIntOrNull()
+    val parsedGenerateDistance = maxBlockGenerateDistance.toIntOrNull()
+    val parsedStepMs = dedicatedServerStepMs.toIntOrNull()
+    val parsedObjects = maxObjectsPerBlock.toIntOrNull()
+    val parsedItemTtl = itemEntityTtl.toIntOrNull()
+    val parsedPackets = maxPacketsPerIteration.toIntOrNull()
+    val parsedMapgenLimit = mapgenLimit.toIntOrNull()
+    val profileValid =
+        parsedTimeSpeed != null && parsedTimeSpeed in 0..2_400 &&
+        parsedActiveBlockRange != null && parsedActiveBlockRange in 1..10 &&
+        parsedSendDistance != null && parsedSendDistance in 1..64 &&
+        parsedGenerateDistance != null && parsedGenerateDistance in 1..64 &&
+        parsedStepMs != null && parsedStepMs in 20..1_000 &&
+        parsedObjects != null && parsedObjects in 1..256 &&
+        parsedItemTtl != null && parsedItemTtl in -1..86_400 &&
+        parsedPackets != null && parsedPackets in 64..16_384 &&
+        parsedMapgenLimit != null && parsedMapgenLimit in 100..31_000
+
+    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        item {
+            Text("Advanced settings", style = MaterialTheme.typography.headlineSmall)
+            Text(
+                "Stop the server before changing these values. Profile settings are stored in LuaNet; engine overrides are written to minetest.conf.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (!canEdit) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                    Text("Stop the server before changing advanced settings.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+                }
+            }
+        }
+        item { Text("Profile advanced", style = MaterialTheme.typography.titleLarge) }
+        item {
+            OutlinedTextField(
+                value = serverDescription,
+                onValueChange = { serverDescription = it.take(240) },
+                label = { Text("Server description") },
+                supportingText = { Text("Writes server_description") },
+                enabled = canEdit,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = motd,
+                onValueChange = { motd = it.take(240) },
+                label = { Text("MOTD") },
+                supportingText = { Text("Message shown to players on join") },
+                enabled = canEdit,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item { Toggle("Announce on Luanti server list", "Writes server_announce. Keep off for private LAN servers.", announceServer, canEdit) { announceServer = it } }
+        item {
+            OutlinedTextField(
+                value = defaultPrivileges,
+                onValueChange = { defaultPrivileges = it.take(120) },
+                label = { Text("Default privileges") },
+                supportingText = { Text("Comma-separated, for example interact,shout") },
+                singleLine = true,
+                enabled = canEdit,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        item { Toggle("Require passwords", "Writes disallow_empty_password", disallowEmptyPassword, canEdit) { disallowEmptyPassword = it } }
+        item { Toggle("Rollback recording", "Useful for moderation, costs storage and CPU.", enableRollback, canEdit) { enableRollback = it } }
+        item { NumberSetting("Time speed", "0 freezes time. Default 72.", timeSpeed, canEdit) { timeSpeed = it.filterSignedDigits(4) } }
+        item { NumberSetting("Active block range", "Simulation radius around players, 1-10.", activeBlockRange, canEdit) { activeBlockRange = it.filter(Char::isDigit).take(2) } }
+        item { NumberSetting("Block send distance", "Higher distance costs network/CPU, 1-64.", maxBlockSendDistance, canEdit) { maxBlockSendDistance = it.filter(Char::isDigit).take(2) } }
+        item { NumberSetting("Block generate distance", "World generation distance, 1-64.", maxBlockGenerateDistance, canEdit) { maxBlockGenerateDistance = it.filter(Char::isDigit).take(2) } }
+        item { NumberSetting("Server step ms", "Dedicated server tick interval, 20-1000 ms.", dedicatedServerStepMs, canEdit) { dedicatedServerStepMs = it.filter(Char::isDigit).take(4) } }
+        item { NumberSetting("Max objects per block", "Entity cap per mapblock, 1-256.", maxObjectsPerBlock, canEdit) { maxObjectsPerBlock = it.filter(Char::isDigit).take(3) } }
+        item { NumberSetting("Dropped item TTL seconds", "-1 disables automatic cleanup, 0-86400 seconds.", itemEntityTtl, canEdit) { itemEntityTtl = it.filterSignedDigits(6) } }
+        item { NumberSetting("Max packets per iteration", "Network throughput guard, 64-16384.", maxPacketsPerIteration, canEdit) { maxPacketsPerIteration = it.filter(Char::isDigit).take(5) } }
+        item { NumberSetting("Mapgen limit", "World generation limit, 100-31000.", mapgenLimit, canEdit) { mapgenLimit = it.filter(Char::isDigit).take(5) } }
+        item {
+            Button(
+                onClick = {
+                    onSaveSettings(
+                        ServerProfileSettingsUpdate(
+                            profileId = profile.id,
+                            name = profile.name,
+                            engineVersion = profile.engineVersion,
+                            gameKey = profile.gameKey,
+                            mapgen = profile.mapgen,
+                            maxPlayers = profile.maxPlayers,
+                            creative = profile.creative,
+                            damage = profile.damage,
+                            pvp = profile.pvp,
+                            autoOffEnabled = profile.autoOffEnabled,
+                            autoOffMinutes = profile.autoOffMinutes,
+                            serverDescription = serverDescription,
+                            motd = motd,
+                            announceServer = announceServer,
+                            defaultPrivileges = defaultPrivileges,
+                            disallowEmptyPassword = disallowEmptyPassword,
+                            enableRollback = enableRollback,
+                            timeSpeed = parsedTimeSpeed ?: profile.timeSpeed,
+                            activeBlockRange = parsedActiveBlockRange ?: profile.activeBlockRange,
+                            maxBlockSendDistance = parsedSendDistance ?: profile.maxBlockSendDistance,
+                            maxBlockGenerateDistance = parsedGenerateDistance ?: profile.maxBlockGenerateDistance,
+                            dedicatedServerStepMs = parsedStepMs ?: profile.dedicatedServerStepMs,
+                            maxObjectsPerBlock = parsedObjects ?: profile.maxObjectsPerBlock,
+                            itemEntityTtl = parsedItemTtl ?: profile.itemEntityTtl,
+                            maxPacketsPerIteration = parsedPackets ?: profile.maxPacketsPerIteration,
+                            mapgenLimit = parsedMapgenLimit ?: profile.mapgenLimit,
+                        ),
+                    ) { result -> message = result.fold({ it }, { it.message ?: "Save failed" }) }
+                },
+                enabled = canEdit && profileValid,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Save profile advanced settings") }
+        }
+        item { HorizontalDivider(Modifier.padding(vertical = 6.dp)) }
+        item {
+            Text("Engine config overrides", style = MaterialTheme.typography.titleLarge)
+            Text("These are direct Luanti settings. Restart the server after saving.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        items(advancedEngineSettings) { setting ->
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(setting.title, style = MaterialTheme.typography.titleMedium)
+                    Text("${setting.key} · default ${setting.defaultValue}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(setting.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val current = configValues[setting.key].orEmpty()
+                    if (setting.kind == AdvancedSettingKind.BOOL) {
+                        Toggle("Enabled", setting.detail, current.equals("true", ignoreCase = true), canEdit) { checked ->
+                            configValues = configValues + (setting.key to checked.toString())
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = current,
+                            onValueChange = { value ->
+                                val next = if (setting.kind == AdvancedSettingKind.NUMBER) {
+                                    value.filter { it.isDigit() || it == '.' || it == '-' }.take(24)
+                                } else {
+                                    value.take(120)
+                                }
+                                configValues = configValues + (setting.key to next)
+                            },
+                            label = { Text("Value") },
+                            enabled = canEdit,
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalButton(
+                            enabled = canEdit && current.isNotBlank(),
+                            onClick = {
+                                onSaveConfig(profile.id, setting.key, current) { result ->
+                                    message = result.fold({ it }, { it.message ?: "Save failed" })
+                                }
+                            },
+                        ) { Text("Save") }
+                        TextButton(
+                            enabled = canEdit,
+                            onClick = { configValues = configValues + (setting.key to setting.defaultValue) },
+                        ) { Text("Reset field") }
+                    }
+                }
+            }
+        }
+        message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) } }
+    }
+}
+
 @Composable
 private fun SettingsPanel(
     profile: ServerProfileEntity,
@@ -1707,37 +2006,12 @@ private fun SettingsPanel(
     var pvp by remember(profile.id, profile.pvp) { mutableStateOf(profile.pvp) }
     var autoOffEnabled by remember(profile.id, profile.autoOffEnabled) { mutableStateOf(profile.autoOffEnabled) }
     var autoOffMinutes by remember(profile.id, profile.autoOffMinutes) { mutableStateOf(profile.autoOffMinutes.toString()) }
-    var serverDescription by remember(profile.id, profile.serverDescription) { mutableStateOf(profile.serverDescription) }
-    var motd by remember(profile.id, profile.motd) { mutableStateOf(profile.motd) }
-    var announceServer by remember(profile.id, profile.announceServer) { mutableStateOf(profile.announceServer) }
-    var defaultPrivileges by remember(profile.id, profile.defaultPrivileges) { mutableStateOf(profile.defaultPrivileges) }
-    var disallowEmptyPassword by remember(profile.id, profile.disallowEmptyPassword) { mutableStateOf(profile.disallowEmptyPassword) }
-    var enableRollback by remember(profile.id, profile.enableRollback) { mutableStateOf(profile.enableRollback) }
-    var timeSpeed by remember(profile.id, profile.timeSpeed) { mutableStateOf(profile.timeSpeed.toString()) }
-    var activeBlockRange by remember(profile.id, profile.activeBlockRange) { mutableStateOf(profile.activeBlockRange.toString()) }
-    var maxBlockSendDistance by remember(profile.id, profile.maxBlockSendDistance) { mutableStateOf(profile.maxBlockSendDistance.toString()) }
-    var maxBlockGenerateDistance by remember(profile.id, profile.maxBlockGenerateDistance) { mutableStateOf(profile.maxBlockGenerateDistance.toString()) }
-    var dedicatedServerStepMs by remember(profile.id, profile.dedicatedServerStepMs) { mutableStateOf(profile.dedicatedServerStepMs.toString()) }
-    var maxObjectsPerBlock by remember(profile.id, profile.maxObjectsPerBlock) { mutableStateOf(profile.maxObjectsPerBlock.toString()) }
-    var itemEntityTtl by remember(profile.id, profile.itemEntityTtl) { mutableStateOf(profile.itemEntityTtl.toString()) }
-    var maxPacketsPerIteration by remember(profile.id, profile.maxPacketsPerIteration) { mutableStateOf(profile.maxPacketsPerIteration.toString()) }
-    var mapgenLimit by remember(profile.id, profile.mapgenLimit) { mutableStateOf(profile.mapgenLimit.toString()) }
     var showVersions by remember { mutableStateOf(false) }
     var showGames by remember { mutableStateOf(false) }
     var showMapgens by remember { mutableStateOf(false) }
-    var showAdvanced by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     val parsedPlayers = maxPlayers.toIntOrNull()
     val parsedAutoOffMinutes = autoOffMinutes.toIntOrNull()
-    val parsedTimeSpeed = timeSpeed.toIntOrNull()
-    val parsedActiveBlockRange = activeBlockRange.toIntOrNull()
-    val parsedSendDistance = maxBlockSendDistance.toIntOrNull()
-    val parsedGenerateDistance = maxBlockGenerateDistance.toIntOrNull()
-    val parsedStepMs = dedicatedServerStepMs.toIntOrNull()
-    val parsedObjects = maxObjectsPerBlock.toIntOrNull()
-    val parsedItemTtl = itemEntityTtl.toIntOrNull()
-    val parsedPackets = maxPacketsPerIteration.toIntOrNull()
-    val parsedMapgenLimit = mapgenLimit.toIntOrNull()
     val selectedGameTitle = gamePackages.firstOrNull { it.packageKey == gameKey }?.title
         ?: gameKey
         ?: "No game selected"
@@ -1745,16 +2019,7 @@ private fun SettingsPanel(
         mapgen in ServerRepository.MAPGENS &&
         parsedPlayers != null &&
         parsedPlayers in 1..100 &&
-        (!autoOffEnabled || (parsedAutoOffMinutes != null && parsedAutoOffMinutes in 1..1_440)) &&
-        parsedTimeSpeed != null && parsedTimeSpeed in 0..2_400 &&
-        parsedActiveBlockRange != null && parsedActiveBlockRange in 1..10 &&
-        parsedSendDistance != null && parsedSendDistance in 1..64 &&
-        parsedGenerateDistance != null && parsedGenerateDistance in 1..64 &&
-        parsedStepMs != null && parsedStepMs in 20..1_000 &&
-        parsedObjects != null && parsedObjects in 1..256 &&
-        parsedItemTtl != null && parsedItemTtl in -1..86_400 &&
-        parsedPackets != null && parsedPackets in 64..16_384 &&
-        parsedMapgenLimit != null && parsedMapgenLimit in 100..31_000
+        (!autoOffEnabled || (parsedAutoOffMinutes != null && parsedAutoOffMinutes in 1..1_440))
 
     LazyColumn(
         Modifier.fillMaxSize().padding(20.dp),
@@ -1833,58 +2098,6 @@ private fun SettingsPanel(
                 modifier = Modifier.fillMaxWidth(),
             )
         }
-        item { HorizontalDivider(Modifier.padding(vertical = 6.dp)) }
-        item {
-            FilledTonalButton(
-                onClick = { showAdvanced = !showAdvanced },
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-            ) { Text(if (showAdvanced) "Hide advanced settings" else "Advanced settings") }
-        }
-        if (showAdvanced) {
-            item {
-                OutlinedTextField(
-                    value = serverDescription,
-                    onValueChange = { serverDescription = it.take(240) },
-                    label = { Text("Server description") },
-                    supportingText = { Text("Writes server_description") },
-                    enabled = canEdit,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            item {
-                OutlinedTextField(
-                    value = motd,
-                    onValueChange = { motd = it.take(240) },
-                    label = { Text("MOTD") },
-                    supportingText = { Text("Message shown to players on join") },
-                    enabled = canEdit,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            item { Toggle("Announce on Luanti server list", "Writes server_announce. Keep off for private LAN servers.", announceServer, canEdit) { announceServer = it } }
-            item {
-                OutlinedTextField(
-                    value = defaultPrivileges,
-                    onValueChange = { defaultPrivileges = it.take(120) },
-                    label = { Text("Default privileges") },
-                    supportingText = { Text("Comma-separated, for example interact,shout") },
-                    singleLine = true,
-                    enabled = canEdit,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-            item { Toggle("Require passwords", "Writes disallow_empty_password", disallowEmptyPassword, canEdit) { disallowEmptyPassword = it } }
-            item { Toggle("Rollback recording", "Useful for moderation, costs storage and CPU.", enableRollback, canEdit) { enableRollback = it } }
-            item { NumberSetting("Time speed", "0 freezes time. Default 72.", timeSpeed, canEdit) { timeSpeed = it.filterSignedDigits(4) } }
-            item { NumberSetting("Active block range", "Simulation radius around players, 1-10.", activeBlockRange, canEdit) { activeBlockRange = it.filter(Char::isDigit).take(2) } }
-            item { NumberSetting("Block send distance", "Higher distance costs network/CPU, 1-64.", maxBlockSendDistance, canEdit) { maxBlockSendDistance = it.filter(Char::isDigit).take(2) } }
-            item { NumberSetting("Block generate distance", "World generation distance, 1-64.", maxBlockGenerateDistance, canEdit) { maxBlockGenerateDistance = it.filter(Char::isDigit).take(2) } }
-            item { NumberSetting("Server step ms", "Dedicated server tick interval, 20-1000 ms.", dedicatedServerStepMs, canEdit) { dedicatedServerStepMs = it.filter(Char::isDigit).take(4) } }
-            item { NumberSetting("Max objects per block", "Entity cap per mapblock, 1-256.", maxObjectsPerBlock, canEdit) { maxObjectsPerBlock = it.filter(Char::isDigit).take(3) } }
-            item { NumberSetting("Dropped item TTL seconds", "-1 disables automatic cleanup, 0-86400 seconds.", itemEntityTtl, canEdit) { itemEntityTtl = it.filterSignedDigits(6) } }
-            item { NumberSetting("Max packets per iteration", "Network throughput guard, 64-16384.", maxPacketsPerIteration, canEdit) { maxPacketsPerIteration = it.filter(Char::isDigit).take(5) } }
-            item { NumberSetting("Mapgen limit", "World generation limit, 100-31000.", mapgenLimit, canEdit) { mapgenLimit = it.filter(Char::isDigit).take(5) } }
-        }
         message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) } }
         item {
             Button(
@@ -1902,21 +2115,21 @@ private fun SettingsPanel(
                             pvp = pvp,
                             autoOffEnabled = autoOffEnabled,
                             autoOffMinutes = parsedAutoOffMinutes ?: profile.autoOffMinutes,
-                            serverDescription = serverDescription,
-                            motd = motd,
-                            announceServer = announceServer,
-                            defaultPrivileges = defaultPrivileges,
-                            disallowEmptyPassword = disallowEmptyPassword,
-                            enableRollback = enableRollback,
-                            timeSpeed = parsedTimeSpeed ?: profile.timeSpeed,
-                            activeBlockRange = parsedActiveBlockRange ?: profile.activeBlockRange,
-                            maxBlockSendDistance = parsedSendDistance ?: profile.maxBlockSendDistance,
-                            maxBlockGenerateDistance = parsedGenerateDistance ?: profile.maxBlockGenerateDistance,
-                            dedicatedServerStepMs = parsedStepMs ?: profile.dedicatedServerStepMs,
-                            maxObjectsPerBlock = parsedObjects ?: profile.maxObjectsPerBlock,
-                            itemEntityTtl = parsedItemTtl ?: profile.itemEntityTtl,
-                            maxPacketsPerIteration = parsedPackets ?: profile.maxPacketsPerIteration,
-                            mapgenLimit = parsedMapgenLimit ?: profile.mapgenLimit,
+                            serverDescription = profile.serverDescription,
+                            motd = profile.motd,
+                            announceServer = profile.announceServer,
+                            defaultPrivileges = profile.defaultPrivileges,
+                            disallowEmptyPassword = profile.disallowEmptyPassword,
+                            enableRollback = profile.enableRollback,
+                            timeSpeed = profile.timeSpeed,
+                            activeBlockRange = profile.activeBlockRange,
+                            maxBlockSendDistance = profile.maxBlockSendDistance,
+                            maxBlockGenerateDistance = profile.maxBlockGenerateDistance,
+                            dedicatedServerStepMs = profile.dedicatedServerStepMs,
+                            maxObjectsPerBlock = profile.maxObjectsPerBlock,
+                            itemEntityTtl = profile.itemEntityTtl,
+                            maxPacketsPerIteration = profile.maxPacketsPerIteration,
+                            mapgenLimit = profile.mapgenLimit,
                         ),
                     ) { result -> message = result.fold({ it }, { it.message ?: "Save failed" }) }
                 },

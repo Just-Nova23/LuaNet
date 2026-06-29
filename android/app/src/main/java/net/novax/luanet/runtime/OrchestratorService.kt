@@ -124,7 +124,7 @@ class OrchestratorService : Service() {
         val consoleModName = "lnet_console_${profile.id.take(8).filter { it.isLetterOrDigit() }}"
         cleanupLuaNetRuntimeMods(root, world, consoleModName)
         writeLuaNetRuntimeMod(File(world, "worldmods"), consoleModName, consoleAdmin, consolePassword)
-        writeWorldConfig(world, profile.gameKey, packages, File(root, "mods"))
+        writeWorldConfig(world, profile.engineVersion, profile.gameKey, packages, File(root, "mods"))
         val config = File(root, "minetest.conf")
         val customSettings = repository.configSettings(profile.id).associate { it.key to it.value }
         writeConfig(config, profile, port, consoleAdmin, consolePassword, customSettings)
@@ -625,7 +625,7 @@ class OrchestratorService : Service() {
         )
     }
 
-    private fun writeWorldConfig(world: File, gameKey: String?, packages: List<InstalledPackageEntity>, modsRoot: File) {
+    private fun writeWorldConfig(world: File, engineVersion: String, gameKey: String?, packages: List<InstalledPackageEntity>, modsRoot: File) {
         val existing = File(world, "world.mt")
         val preserved = linkedMapOf<String, String>()
         if (existing.isFile) {
@@ -636,13 +636,28 @@ class OrchestratorService : Service() {
                 }
             }
         }
-        preserved["backend"] = preserved["backend"] ?: "sqlite3"
+        preserved["backend"] = "sqlite3"
+        preserved["player_backend"] = "sqlite3"
+        preserved["auth_backend"] = "sqlite3"
+        if (supportsSqliteModStorage(engineVersion)) {
+            preserved["mod_storage_backend"] = "sqlite3"
+        } else {
+            preserved.remove("mod_storage_backend")
+        }
         gameKey?.substringAfter('/')?.takeIf { it.isNotBlank() }?.let { preserved["gameid"] = it }
         preserved.keys.filter { it.startsWith("load_mod_") }.toList().forEach { preserved.remove(it) }
         enabledModNames(packages, modsRoot).forEach { modName ->
             preserved["load_mod_$modName"] = "true"
         }
         existing.writeText(preserved.entries.joinToString(separator = "\n", postfix = "\n") { (key, value) -> "$key = $value" })
+    }
+
+    private fun supportsSqliteModStorage(engineVersion: String): Boolean {
+        val parts = engineVersion.split('.').mapNotNull { it.toIntOrNull() }
+        val major = parts.getOrElse(0) { 0 }
+        val minor = parts.getOrElse(1) { 0 }
+        val patch = parts.getOrElse(2) { 0 }
+        return major > 5 || (major == 5 && (minor > 5 || (minor == 5 && patch >= 0)))
     }
 
     private fun enabledModNames(packages: List<InstalledPackageEntity>, modsRoot: File): List<String> {

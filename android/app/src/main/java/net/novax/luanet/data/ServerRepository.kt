@@ -113,6 +113,7 @@ class ServerRepository(
     suspend fun packages(profileId: String) = dao.packages(profileId)
     fun observePlayers(profileId: String) = dao.observePlayers(profileId)
     suspend fun configSettings(profileId: String) = dao.configSettings(profileId)
+    fun observeConfigSettings(profileId: String) = dao.observeConfigSettings(profileId)
     fun observeModSettings(profileId: String): Flow<List<ServerModSetting>> =
         dao.observeConfigSettings(profileId).map { saved ->
             modSettingDefinitions(profileId, packages(profileId), saved.associate { it.key to it.value })
@@ -226,6 +227,10 @@ class ServerRepository(
     suspend fun markPlayerAdmin(profileId: String, rawName: String, admin: Boolean) = dao.updatePlayerAdmin(profileId, rawName.safePlayerName(), admin)
 
     suspend fun saveModSetting(profileId: String, key: String, value: String) {
+        saveConfigSetting(profileId, key, value)
+    }
+
+    suspend fun saveConfigSetting(profileId: String, key: String, value: String) {
         require(key.matches(SETTING_KEY)) { "Invalid setting key" }
         require(value.length <= 512) { "Setting value is too long" }
         dao.upsertConfigSetting(ServerConfigSettingEntity(profileId, key, value.trim(), System.currentTimeMillis()))
