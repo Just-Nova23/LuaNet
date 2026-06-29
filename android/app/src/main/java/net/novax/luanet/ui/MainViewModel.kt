@@ -1,6 +1,7 @@
 package net.novax.luanet.ui
 
 import android.app.Application
+import android.app.Activity
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -11,10 +12,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import net.novax.luanet.BuildConfig
 import net.novax.luanet.LuaNetApplication
 import net.novax.luanet.data.ArchiveCopyProgress
 import net.novax.luanet.data.ServerProfileSettingsUpdate
 import net.novax.luanet.domain.EngineCatalog
+import net.novax.luanet.domain.EntitlementPolicy
 import net.novax.luanet.domain.SubscriptionTier
 import net.novax.luanet.data.importer.ImportKind
 import net.novax.luanet.data.content.ContentHomeSection
@@ -36,10 +39,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val content: StateFlow<ContentBrowserState> = _content.asStateFlow()
     private val _contentDetails = MutableStateFlow<Map<String, ContentDetailState>>(emptyMap())
     val contentDetails: StateFlow<Map<String, ContentDetailState>> = _contentDetails.asStateFlow()
-    private val _account = MutableStateFlow(AccountState(
-        tokenConfigured = container.authTokens.bearerToken() != null,
-        tier = entitlementStore.current(),
-    ))
+    private val _account = MutableStateFlow(currentAccountState())
     val account: StateFlow<AccountState> = _account.asStateFlow()
 
     init {
@@ -158,7 +158,67 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveAccountToken(token: String) {
         if (token.isBlank()) container.authTokens.clear() else container.authTokens.updateBearerToken(token)
-        _account.value = _account.value.copy(tokenConfigured = container.authTokens.bearerToken() != null)
+        _account.value = currentAccountState()
+    }
+
+    fun signInWithEmail(email: String, password: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                container.accountGateway.signInWithEmail(email, password)
+                _account.value = currentAccountState()
+                if (_account.value.emailVerified) "Signed in" else "Signed in. Verify your email before public tunnels."
+            })
+        }
+    }
+
+    fun createEmailAccount(email: String, password: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                container.accountGateway.createEmailAccount(email, password)
+                _account.value = currentAccountState()
+                "Account created. Verification email sent."
+            })
+        }
+    }
+
+    fun signInWithGoogle(activity: Activity, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                container.accountGateway.signInWithGoogle(activity)
+                _account.value = currentAccountState()
+                "Signed in with Google"
+            })
+        }
+    }
+
+    fun sendVerificationEmail(onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                container.accountGateway.sendVerificationEmail()
+                "Verification email sent"
+            })
+        }
+    }
+
+    fun signOut() {
+        container.accountGateway.signOut()
+        container.authTokens.clear()
+        entitlementStore.update(SubscriptionTier.FREE, 0L)
+        _account.value = currentAccountState()
+    }
+
+    fun deleteAccount(onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                require(account.value.tokenConfigured) { "Sign in before deleting the account" }
+                container.controlPlane.deleteAccount()
+                container.accountGateway.signOut()
+                container.authTokens.clear()
+                entitlementStore.update(SubscriptionTier.FREE, 0L)
+                _account.value = currentAccountState()
+                "Account deleted"
+            })
+        }
     }
 
     fun syncEntitlement(onResult: (Result<String>) -> Unit) {
@@ -169,25 +229,61 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val visibleExpiry = response.expiresAt.takeIf { tier == SubscriptionTier.PREMIUM }
                 val expiresAt = visibleExpiry?.let { Instant.parse(it).toEpochMilli() } ?: 0L
                 entitlementStore.update(tier, expiresAt)
-                _account.value = _account.value.copy(tokenConfigured = true, tier = tier, expiresAt = visibleExpiry)
+                _account.value = currentAccountState(tier = tier, expiresAt = visibleExpiry)
                 "NovaX entitlement: ${response.tier}"
             })
         }
     }
 
-    fun startPublicTunnel(profileId: String, localPort: Int, onResult: (Result<String>) -> Unit) {
+    fun purchasePremium(activity: Activity, yearly: Boolean, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                require(account.value.tokenConfigured) { "Sign in before buying Premium" }
+                val token = if (yearly) container.billing.purchaseYearly(activity) else container.billing.purchaseMonthly(activity)
+                val response = container.controlPlane.verifyPurchase(token)
+                val tier = if (response.tier == "premium") SubscriptionTier.PREMIUM else SubscriptionTier.FREE
+                val visibleExpiry = response.expiresAt.takeIf { tier == SubscriptionTier.PREMIUM }
+                entitlementStore.update(tier, visibleExpiry?.let { Instant.parse(it).toEpochMilli() } ?: 0L)
+                _account.value = currentAccountState(tier = tier, expiresAt = visibleExpiry)
+                "Premium active"
+            })
+        }
+    }
+
+    fun restorePremium(onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                require(account.value.tokenConfigured) { "Sign in before restoring Premium" }
+                val tokens = container.billing.restorePurchaseTokens()
+                require(tokens.isNotEmpty()) { "No active Play subscriptions found" }
+                var latest = container.controlPlane.verifyPurchase(tokens.first())
+                tokens.drop(1).forEach { token ->
+                    val candidate = container.controlPlane.verifyPurchase(token)
+                    if ((candidate.expiresAt ?: "") > (latest.expiresAt ?: "")) latest = candidate
+                }
+                val tier = if (latest.tier == "premium") SubscriptionTier.PREMIUM else SubscriptionTier.FREE
+                val visibleExpiry = latest.expiresAt.takeIf { tier == SubscriptionTier.PREMIUM }
+                entitlementStore.update(tier, visibleExpiry?.let { Instant.parse(it).toEpochMilli() } ?: 0L)
+                _account.value = currentAccountState(tier = tier, expiresAt = visibleExpiry)
+                "Premium restored"
+            })
+        }
+    }
+
+    fun startPublicTunnel(activity: Activity, profileId: String, localPort: Int, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
                 require(localPort > 0) { "Start the local server before opening a public tunnel" }
-                require(container.authTokens.bearerToken() != null) { "Set a NovaX account token before starting a public tunnel" }
+                require(account.value.tokenConfigured) { "Sign in before starting a public tunnel" }
                 val entitlement = runCatching { container.controlPlane.entitlement() }.getOrNull()
-                if (entitlement != null) {
-                    val tier = if (entitlement.tier == "premium") SubscriptionTier.PREMIUM else SubscriptionTier.FREE
-                    val visibleExpiry = entitlement.expiresAt.takeIf { tier == SubscriptionTier.PREMIUM }
-                    entitlementStore.update(tier, visibleExpiry?.let { Instant.parse(it).toEpochMilli() } ?: 0L)
-                    _account.value = _account.value.copy(tokenConfigured = true, tier = tier, expiresAt = visibleExpiry)
-                }
+                val tier = if (entitlement?.tier == "premium") SubscriptionTier.PREMIUM else SubscriptionTier.FREE
+                val visibleExpiry = entitlement?.expiresAt?.takeIf { tier == SubscriptionTier.PREMIUM }
+                entitlementStore.update(tier, visibleExpiry?.let { Instant.parse(it).toEpochMilli() } ?: 0L)
+                _account.value = currentAccountState(tier = tier, expiresAt = visibleExpiry)
                 val hold = container.controlPlane.createHold(container.authTokens.deviceId, profileId)
+                if (EntitlementPolicy.forTier(tier).showAds) {
+                    container.ads.showBeforePublicStart(activity)
+                }
                 val lease = container.controlPlane.activateHold(hold.id)
                 OrchestratorService.startPublic(getApplication(), profileId, lease)
                 "Public tunnel requested: ${lease.publicHost}:${lease.publicPort}"
@@ -377,9 +473,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
     }
+
+    private fun currentAccountState(
+        tier: SubscriptionTier = entitlementStore.current(),
+        expiresAt: String? = null,
+    ): AccountState {
+        val session = container.accountGateway.currentSession()
+        val devTokenConfigured = BuildConfig.DEBUG && container.authTokens.bearerToken() != null
+        return AccountState(
+            firebaseAvailable = session.available,
+            signedIn = session.signedIn,
+            email = session.email,
+            displayName = session.displayName,
+            emailVerified = session.emailVerified,
+            developerTokenConfigured = devTokenConfigured,
+            tokenConfigured = session.signedIn || devTokenConfigured,
+            tier = tier,
+            expiresAt = expiresAt,
+        )
+    }
 }
 
 data class AccountState(
+    val firebaseAvailable: Boolean = false,
+    val signedIn: Boolean = false,
+    val email: String? = null,
+    val displayName: String? = null,
+    val emailVerified: Boolean = false,
+    val developerTokenConfigured: Boolean = false,
     val tokenConfigured: Boolean = false,
     val tier: SubscriptionTier = SubscriptionTier.FREE,
     val expiresAt: String? = null,

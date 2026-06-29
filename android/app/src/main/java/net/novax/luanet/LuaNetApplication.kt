@@ -2,11 +2,14 @@ package net.novax.luanet
 
 import android.app.Application
 import androidx.room.Room
+import net.novax.luanet.account.AccountGateway
 import net.novax.luanet.data.ServerRepository
 import net.novax.luanet.data.backup.BackupManager
 import net.novax.luanet.data.content.ContentDbClient
 import net.novax.luanet.data.db.LuaNetDatabase
 import net.novax.luanet.data.importer.SafeZipImporter
+import net.novax.luanet.monetization.AdMobAdvertisementGate
+import net.novax.luanet.monetization.PlayBillingGateway
 import net.novax.luanet.network.AuthTokenProvider
 import net.novax.luanet.network.AuthTokenStore
 import net.novax.luanet.network.ControlPlaneClient
@@ -26,5 +29,10 @@ class AppContainer(application: Application) {
     val contentDb = ContentDbClient()
     val backups = BackupManager(servers.backupDirectory(), database.dao())
     val authTokens = AuthTokenStore(application)
-    val controlPlane = ControlPlaneClient(AuthTokenProvider { authTokens.requireBearerToken() })
+    val accountGateway = AccountGateway(application)
+    val ads = AdMobAdvertisementGate(application)
+    val billing = PlayBillingGateway(application)
+    val controlPlane = ControlPlaneClient(AuthTokenProvider {
+        if (accountGateway.currentSession().signedIn) accountGateway.freshIdToken() else authTokens.requireBearerToken()
+    })
 }

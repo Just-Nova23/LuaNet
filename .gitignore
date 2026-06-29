@@ -1,6 +1,7 @@
 # IDE and local configuration
 .idea/
 .vscode/
+.tools/
 *.iml
 .env
 .env.*

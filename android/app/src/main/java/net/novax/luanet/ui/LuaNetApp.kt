@@ -3,6 +3,7 @@ package net.novax.luanet.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.Manifest
 import android.app.Activity
@@ -110,6 +111,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -124,6 +128,7 @@ import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.data.db.ServerPlayerEntity
 import net.novax.luanet.data.db.ServerConfigSettingEntity
 import net.novax.luanet.R
+import net.novax.luanet.BuildConfig
 import net.novax.luanet.data.ServerModSetting
 import net.novax.luanet.data.ServerProfileSettingsUpdate
 import net.novax.luanet.data.ServerRepository
@@ -173,6 +178,14 @@ fun LuaNetApp(viewModel: MainViewModel) {
             onBack = { destination = Destination.Servers },
             onSaveAccountToken = viewModel::saveAccountToken,
             onSyncEntitlement = viewModel::syncEntitlement,
+            onSignInEmail = viewModel::signInWithEmail,
+            onCreateEmailAccount = viewModel::createEmailAccount,
+            onGoogleSignIn = viewModel::signInWithGoogle,
+            onSendVerificationEmail = viewModel::sendVerificationEmail,
+            onSignOut = viewModel::signOut,
+            onDeleteAccount = viewModel::deleteAccount,
+            onPurchasePremium = viewModel::purchasePremium,
+            onRestorePremium = viewModel::restorePremium,
         )
         Destination.Create -> CreateServer(
             onBack = { destination = Destination.Servers },
@@ -415,9 +428,22 @@ private fun AccountScreen(
     onBack: () -> Unit,
     onSaveAccountToken: (String) -> Unit,
     onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
+    onSignInEmail: (String, String, (Result<String>) -> Unit) -> Unit,
+    onCreateEmailAccount: (String, String, (Result<String>) -> Unit) -> Unit,
+    onGoogleSignIn: (Activity, (Result<String>) -> Unit) -> Unit,
+    onSendVerificationEmail: ((Result<String>) -> Unit) -> Unit,
+    onSignOut: () -> Unit,
+    onDeleteAccount: ((Result<String>) -> Unit) -> Unit,
+    onPurchasePremium: (Activity, Boolean, (Result<String>) -> Unit) -> Unit,
+    onRestorePremium: ((Result<String>) -> Unit) -> Unit,
 ) {
+    val context = LocalContext.current
     var token by remember { mutableStateOf("") }
+    var email by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
+    var confirmDelete by remember { mutableStateOf(false) }
+    val activity = context.findActivity()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -440,11 +466,29 @@ private fun AccountScreen(
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text(if (account.tokenConfigured) "Token configured" else "No account token", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            when {
+                                account.signedIn -> account.email ?: account.displayName ?: "Signed in"
+                                account.developerTokenConfigured -> "Debug token configured"
+                                else -> "Not signed in"
+                            },
+                            style = MaterialTheme.typography.titleMedium,
+                        )
                         Text("Current tier: ${account.tier.name.lowercase().replaceFirstChar(Char::uppercase)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         if (account.expiresAt != null) Text("Expires: ${account.expiresAt}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (account.signedIn) {
+                            Text(
+                                if (account.emailVerified) "Email verified" else "Email not verified. Public tunnels require verification.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (account.emailVerified) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                            )
+                        }
                         Text(
-                            "Temporary debug auth accepts dev:<uid>. Production will use Firebase ID tokens from Google/email sign-in.",
+                            if (account.firebaseAvailable) {
+                                "Public tunnels use Firebase ID tokens and NovaX server-side entitlement checks. LAN hosting stays account-free."
+                            } else {
+                                "Firebase is not configured in this build. Add google-services.json for real accounts."
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -452,32 +496,137 @@ private fun AccountScreen(
                 }
             }
             item {
-                OutlinedTextField(
-                    value = token,
-                    onValueChange = { token = it.take(160) },
-                    label = { Text("NovaX token") },
-                    placeholder = { Text("dev:tester") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                Card {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Sign in", style = MaterialTheme.typography.titleLarge)
+                        OutlinedTextField(
+                            value = email,
+                            onValueChange = { email = it.take(160) },
+                            label = { Text("Email") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it.take(128) },
+                            label = { Text("Password") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { onSignInEmail(email, password) { result -> message = result.fold({ it }, { it.message ?: "Sign-in failed" }) } },
+                                enabled = account.firebaseAvailable && email.isNotBlank() && password.length >= 6,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Sign in") }
+                            FilledTonalButton(
+                                onClick = { onCreateEmailAccount(email, password) { result -> message = result.fold({ it }, { it.message ?: "Account creation failed" }) } },
+                                enabled = account.firebaseAvailable && email.isNotBlank() && password.length >= 6,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Create") }
+                        }
+                        Button(
+                            onClick = {
+                                val currentActivity = activity
+                                if (currentActivity == null) {
+                                    message = "Google sign-in requires an active app screen"
+                                } else {
+                                    onGoogleSignIn(currentActivity) { result -> message = result.fold({ it }, { it.message ?: "Google sign-in failed" }) }
+                                }
+                            },
+                            enabled = account.firebaseAvailable,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Continue with Google") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(
+                                onClick = { onSendVerificationEmail { result -> message = result.fold({ it }, { it.message ?: "Verification failed" }) } },
+                                enabled = account.signedIn && !account.emailVerified,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Verify email") }
+                            FilledTonalButton(
+                                onClick = {
+                                    onSignOut()
+                                    message = "Signed out"
+                                },
+                                enabled = account.signedIn || account.developerTokenConfigured,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Sign out") }
+                        }
+                        TextButton(
+                            onClick = { confirmDelete = true },
+                            enabled = account.tokenConfigured,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) { Text("Delete NovaX account") }
+                    }
+                }
             }
             item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = {
-                            onSaveAccountToken(token)
-                            message = if (token.isBlank()) "Account token cleared" else "Account token saved"
-                            token = ""
-                        },
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Save token") }
-                    FilledTonalButton(
-                        onClick = {
-                            onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) }
-                        },
-                        enabled = account.tokenConfigured,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Sync") }
+                Card {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Premium", style = MaterialTheme.typography.titleLarge)
+                        Text("€1.99/month or €19.10/year. Removes ads, tunnel expiry and Free active-server limits after NovaX verifies the Play purchase.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    val currentActivity = activity
+                                    if (currentActivity == null) message = "Purchase requires an active app screen"
+                                    else onPurchasePremium(currentActivity, false) { result -> message = result.fold({ it }, { it.message ?: "Purchase failed" }) }
+                                },
+                                enabled = account.tokenConfigured,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Monthly") }
+                            Button(
+                                onClick = {
+                                    val currentActivity = activity
+                                    if (currentActivity == null) message = "Purchase requires an active app screen"
+                                    else onPurchasePremium(currentActivity, true) { result -> message = result.fold({ it }, { it.message ?: "Purchase failed" }) }
+                                },
+                                enabled = account.tokenConfigured,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Yearly") }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilledTonalButton(
+                                onClick = { onRestorePremium { result -> message = result.fold({ it }, { it.message ?: "Restore failed" }) } },
+                                enabled = account.tokenConfigured,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Restore") }
+                            FilledTonalButton(
+                                onClick = { onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) } },
+                                enabled = account.tokenConfigured,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Sync") }
+                        }
+                    }
+                }
+            }
+            if (BuildConfig.DEBUG) {
+                item {
+                    Card {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Debug token", style = MaterialTheme.typography.titleMedium)
+                            Text("Only for local control-plane development. Production uses Firebase Auth.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedTextField(
+                                value = token,
+                                onValueChange = { token = it.take(160) },
+                                label = { Text("NovaX token") },
+                                placeholder = { Text("dev:tester") },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Button(
+                                onClick = {
+                                    onSaveAccountToken(token)
+                                    message = if (token.isBlank()) "Debug token cleared" else "Debug token saved"
+                                    token = ""
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) { Text("Save debug token") }
+                        }
+                    }
                 }
             }
             message?.let {
@@ -489,6 +638,22 @@ private fun AccountScreen(
                 }
             }
         }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete account?") },
+            text = { Text("This revokes public tunnels, removes NovaX entitlement data and deletes the Firebase Auth user on the control plane.") },
+            confirmButton = {
+                Button(onClick = {
+                    confirmDelete = false
+                    onDeleteAccount { result -> message = result.fold({ it }, { it.message ?: "Delete account failed" }) }
+                }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
@@ -667,7 +832,7 @@ private fun Dashboard(
     hasModSettings: Boolean,
     onSaveServerSettings: ServerSettingsSaver,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
-    onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
+    onStartPublicTunnel: (Activity, String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
     onSetPlayerAdminOffline: (String, String, Boolean, (Result<String>) -> Unit) -> Unit,
     onUnbanPlayerOffline: (String, String, (Result<String>) -> Unit) -> Unit,
@@ -2515,7 +2680,7 @@ private fun Overview(
     runtime: RuntimeSnapshot?,
     localPort: Int?,
     context: Context,
-    onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
+    onStartPublicTunnel: (Activity, String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
 ) {
     var publicMessage by remember(profile.id) { mutableStateOf<String?>(null) }
@@ -2597,7 +2762,16 @@ private fun Overview(
                         }
                     } else {
                         Button(
-                            onClick = { onStartPublicTunnel(profile.id, localPort ?: 0) { result -> publicMessage = result.fold({ it }, { it.message ?: "Tunnel start failed" }) } },
+                            onClick = {
+                                val activity = context.findActivity()
+                                if (activity == null) {
+                                    publicMessage = "Public tunnel requires an active app screen"
+                                } else {
+                                    onStartPublicTunnel(activity, profile.id, localPort ?: 0) { result ->
+                                        publicMessage = result.fold({ it }, { it.message ?: "Tunnel start failed" })
+                                    }
+                                }
+                            },
                             enabled = running && localPort != null && localPort > 0,
                             modifier = Modifier.fillMaxWidth(),
                         ) { Text("Start public tunnel") }
@@ -2614,6 +2788,12 @@ private fun Overview(
 
 private fun copy(context: Context, text: String) {
     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("LuaNet address", text))
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 private fun openLuanti(context: Context) {

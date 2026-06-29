@@ -1,10 +1,11 @@
 # LuaNet privacy policy
 
-Last updated: 21 June 2026
+Last updated: 29 June 2026
 
 LAN hosting works without an account and sends no hosting data to NovaX. Public tunnelling
 requires a verified Firebase account. NovaX stores the account identifier, registered
-devices, tunnel leases, aggregate usage, purchase entitlement, and security/anti-abuse logs.
+devices, tunnel leases, aggregate usage, Google Play purchase entitlement, and
+security/anti-abuse logs.
 Security logs are deleted after 30 days.
 
 LuaNet does not upload worlds, game chat, player names, installed content, or console logs to
@@ -22,4 +23,3 @@ the user removes the app data.
 
 LuaNet is intended for a Teen audience and is not directed to children. Privacy requests:
 `luanet@novaxhosting.com`.
-

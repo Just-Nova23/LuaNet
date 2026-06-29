@@ -55,9 +55,24 @@ the new stable key.
 
 ## External services
 
-`AuthTokenProvider`, `AdvertisementGate`, and `BillingGateway` are deliberate integration
-boundaries. Production Firebase Auth, AdMob UMP/interstitial, and Play Billing adapters must
-be supplied in the Play build after their console resources and secrets exist. LAN hosting
-does not depend on those services.
+LAN hosting does not depend on external services. NovaX public access and Premium use:
+
+- Firebase Auth for Google sign-in, email/password sign-in, verified-email enforcement, ID
+  tokens, sign-out, and account deletion.
+- AdMob UMP plus one interstitial before each Free public-tunnel start. Ad load failure must
+  never block hosting; Premium skips ads.
+- Play Billing subscriptions `luanet_premium_monthly` and `luanet_premium_yearly`. The app
+  sends only the purchase token to NovaX; entitlement is granted only after server-side
+  Google Play verification.
+
+Release builds should provide:
+
+- `google-services.json` in `android/app/`;
+- `LUANET_GOOGLE_WEB_CLIENT_ID` for Credential Manager Google sign-in;
+- `LUANET_ADMOB_APP_ID`;
+- `LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID`.
+
+Debug builds without Firebase can still use the account screen's `dev:<uid>` token field
+against a local development control plane. Production must use Firebase ID tokens.
 
 Do not commit `google-services.json`, signing keys, Firebase service accounts, or AdMob IDs.
