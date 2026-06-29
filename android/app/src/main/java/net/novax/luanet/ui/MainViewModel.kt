@@ -116,6 +116,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setPlayerPrivilegeOffline(profileId: String, playerName: String, privilege: String, enabled: Boolean, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching { repository.setPlayerPrivilegeOffline(profileId, playerName, privilege, enabled) })
+        }
+    }
+
     fun unbanPlayerOffline(profileId: String, playerName: String, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching { repository.unbanPlayerOffline(profileId, playerName) })

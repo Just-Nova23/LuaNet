@@ -146,6 +146,7 @@ private sealed interface Destination {
     data class AdvancedSettings(val id: String) : Destination
     data class GameSettings(val id: String) : Destination
     data class ModSettings(val id: String) : Destination
+    data class PlayerMenu(val id: String, val playerName: String) : Destination
 }
 
 private typealias ServerSettingsSaver = (
@@ -196,6 +197,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 onOpenAdvancedSettings = { destination = Destination.AdvancedSettings(current.id) },
                 onOpenGameSettings = { destination = Destination.GameSettings(current.id) },
                 onOpenModSettings = { destination = Destination.ModSettings(current.id) },
+                onOpenPlayer = { destination = Destination.PlayerMenu(current.id, it) },
                 hasGameSettings = gameSettings.isNotEmpty(),
                 hasModSettings = modSettings.isNotEmpty(),
                 onSaveServerSettings = viewModel::updateServerSettings,
@@ -265,6 +267,35 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 settings = modSettings,
                 onBack = { destination = Destination.Dashboard(current.id) },
                 onSave = viewModel::saveModSetting,
+            )
+        }
+        is Destination.PlayerMenu -> {
+            val context = LocalContext.current
+            val players by viewModel.players(current.id).collectAsStateWithLifecycle(emptyList())
+            val sessions by RuntimeRegistry.sessions.collectAsStateWithLifecycle()
+            val runtime = sessions[current.id]
+            val runtimePlayers = runtime?.players.orEmpty()
+            val player = players.firstOrNull { it.name == current.playerName }
+                ?: ServerPlayerEntity(
+                    profileId = current.id,
+                    name = current.playerName,
+                    firstSeenAt = 0,
+                    lastSeenAt = 0,
+                    online = current.playerName in runtimePlayers,
+                    banned = false,
+                    admin = false,
+                    privileges = "",
+                )
+            PlayerMenuScreen(
+                profileId = current.id,
+                player = player,
+                isOnline = player.online || player.name in runtimePlayers,
+                running = runtime?.state in setOf("STARTING", "RUNNING", "STOPPING"),
+                onBack = { destination = Destination.Dashboard(current.id) },
+                onCommand = { command -> OrchestratorService.command(context, current.id, command) },
+                onSetAdminOffline = viewModel::setPlayerAdminOffline,
+                onSetPrivilegeOffline = viewModel::setPlayerPrivilegeOffline,
+                onUnbanOffline = viewModel::unbanPlayerOffline,
             )
         }
     }
@@ -631,6 +662,7 @@ private fun Dashboard(
     onOpenAdvancedSettings: () -> Unit,
     onOpenGameSettings: () -> Unit,
     onOpenModSettings: () -> Unit,
+    onOpenPlayer: (String) -> Unit,
     hasGameSettings: Boolean,
     hasModSettings: Boolean,
     onSaveServerSettings: ServerSettingsSaver,
@@ -693,13 +725,9 @@ private fun Dashboard(
                     OrchestratorService.command(context, profile.id, command)
                 }
                 DashboardTabKey.PLAYERS -> PlayersPanel(
-                    profileId = profile.id,
                     players = players,
                     runtimePlayers = runtime?.players.orEmpty(),
-                    running = running,
-                    onCommand = { command -> OrchestratorService.command(context, profile.id, command) },
-                    onSetAdminOffline = onSetPlayerAdminOffline,
-                    onUnbanOffline = onUnbanPlayerOffline,
+                    onOpenPlayer = onOpenPlayer,
                 )
                 DashboardTabKey.CONTENT -> ContentSummaryPanel(
                     profile = profile,
@@ -768,21 +796,15 @@ private fun ConsolePanel(
 
 @Composable
 private fun PlayersPanel(
-    profileId: String,
     players: List<ServerPlayerEntity>,
     runtimePlayers: Set<String>,
-    running: Boolean,
-    onCommand: (String) -> Unit,
-    onSetAdminOffline: (String, String, Boolean, (Result<String>) -> Unit) -> Unit,
-    onUnbanOffline: (String, String, (Result<String>) -> Unit) -> Unit,
+    onOpenPlayer: (String) -> Unit,
 ) {
-    val context = LocalContext.current
-    var selectedPlayerName by remember { mutableStateOf<String?>(null) }
     val merged = remember(players, runtimePlayers) {
         val byName = players.associateBy { it.name }.toMutableMap()
         runtimePlayers.forEach { name ->
             if (name.isNotBlank() && byName[name] == null) {
-                byName[name] = ServerPlayerEntity("", name, 0, 0, online = true, banned = false, admin = false)
+                byName[name] = ServerPlayerEntity("", name, 0, 0, online = true, banned = false, admin = false, privileges = "")
             }
         }
         byName.values.sortedWith(compareByDescending<ServerPlayerEntity> { it.online || it.name in runtimePlayers }.thenBy { it.name.lowercase() })
@@ -802,7 +824,7 @@ private fun PlayersPanel(
             items(merged) { player ->
                 val isOnline = player.online || player.name in runtimePlayers
                 Card(
-                    modifier = Modifier.fillMaxWidth().clickable { selectedPlayerName = player.name },
+                    modifier = Modifier.fillMaxWidth().clickable { onOpenPlayer(player.name) },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 ) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -828,188 +850,178 @@ private fun PlayersPanel(
             }
         }
     }
-    selectedPlayerName?.let { name ->
-        val player = merged.firstOrNull { it.name == name }
-        if (player == null) {
-            selectedPlayerName = null
-            return@let
-        }
-        PlayerActionsDialog(
-            profileId = profileId,
-            player = player,
-            isOnline = player.online || player.name in runtimePlayers,
-            running = running,
-            onDismiss = { selectedPlayerName = null },
-            onCopyName = { copy(context, player.name) },
-            onCommand = onCommand,
-            onSetAdminOffline = onSetAdminOffline,
-            onUnbanOffline = onUnbanOffline,
-        )
-    }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PlayerActionsDialog(
+private fun PlayerMenuScreen(
     profileId: String,
     player: ServerPlayerEntity,
     isOnline: Boolean,
     running: Boolean,
-    onDismiss: () -> Unit,
-    onCopyName: () -> Unit,
+    onBack: () -> Unit,
     onCommand: (String) -> Unit,
     onSetAdminOffline: (String, String, Boolean, (Result<String>) -> Unit) -> Unit,
+    onSetPrivilegeOffline: (String, String, String, Boolean, (Result<String>) -> Unit) -> Unit,
     onUnbanOffline: (String, String, (Result<String>) -> Unit) -> Unit,
 ) {
+    val context = LocalContext.current
     val safe = player.name.safePlayerName()
-    var kickReason by remember(player.name) { mutableStateOf("") }
-    var customPrivilege by remember(player.name) { mutableStateOf("") }
-    var actionMessage by remember(player.name) { mutableStateOf<String?>(null) }
-    val sendRunningCommand: (String) -> Unit = { command ->
-        onCommand(command)
-        actionMessage = "Command sent to Luanti. If it fails, LuaNet will keep this player unchanged and the error will appear in Console."
+    val currentPrivileges = remember(player.privileges, player.admin) {
+        val parsed = player.privileges.privilegeSet()
+        if (parsed.isEmpty() && player.admin) COMMON_PLAYER_PRIVILEGES.mapTo(linkedSetOf()) { it.key } else parsed
     }
-    val runOfflineAction: (((Result<String>) -> Unit) -> Unit) -> Unit = { action ->
+    var kickReason by remember(player.name) { mutableStateOf("") }
+    var actionMessage by remember(player.name) { mutableStateOf<String?>(null) }
+    val messageIsError = actionMessage?.let { message ->
+        message.contains("failed", ignoreCase = true) ||
+            message.contains("does not", ignoreCase = true) ||
+            message.contains("must join", ignoreCase = true) ||
+            message.contains("stop the server", ignoreCase = true) ||
+            message.contains("offline", ignoreCase = true)
+    } == true
+    fun sendRunningCommand(command: String) {
+        onCommand(command)
+        actionMessage = "Command sent. This screen updates only after Luanti confirms the new state."
+    }
+    fun offlineOnlyError() {
+        actionMessage = "Stop the server before changing privileges for an offline player. LuaNet will not fake a server action."
+    }
+    fun runOfflineAction(action: ((Result<String>) -> Unit) -> Unit) {
         actionMessage = "Applying offline change..."
         action { result -> actionMessage = result.fold({ it }, { it.message ?: "Action failed" }) }
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(player.name) },
-        text = {
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                item {
-                    Text(
-                        buildList {
-                            add(if (isOnline) "Online" else "Offline")
-                            if (player.admin) add("Admin")
-                            if (player.banned) add("Banned")
-                            add(if (running) "Server running" else "Server stopped")
-                        }.joinToString(" · "),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                actionMessage?.let { message ->
-                    item {
+    fun changePrivilege(privilege: String, enabled: Boolean) {
+        if (running && isOnline) {
+            sendRunningCommand("/${if (enabled) "grant" else "revoke"} $safe $privilege")
+        } else if (running) {
+            offlineOnlyError()
+        } else {
+            runOfflineAction { onSetPrivilegeOffline(profileId, safe, privilege, enabled, it) }
+        }
+    }
+
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text(player.name) },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+        )
+    }) { padding ->
+        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            item {
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Player status", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            message,
-                            color = if (
-                                message.contains("failed", ignoreCase = true) ||
-                                message.contains("does not", ignoreCase = true) ||
-                                message.contains("must join", ignoreCase = true) ||
-                                message.contains("stop the server", ignoreCase = true)
-                            ) {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                        )
-                    }
-                }
-                item {
-                    OutlinedTextField(
-                        value = kickReason,
-                        onValueChange = { kickReason = it.replace("\n", " ").take(120) },
-                        label = { Text("Kick reason") },
-                        placeholder = { Text("Optional") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Kick", running && isOnline && safe.isNotBlank()) { sendRunningCommand("/kick $safe") }
-                        PlayerActionButton("Kick with reason", running && isOnline && safe.isNotBlank() && kickReason.isNotBlank()) {
-                            sendRunningCommand("/kick $safe ${kickReason.trim()}")
-                        }
-                    }
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Ban", running && isOnline && safe.isNotBlank() && !player.banned) { sendRunningCommand("/ban $safe") }
-                        PlayerActionButton("Unban", safe.isNotBlank() && (running || player.banned)) {
-                            if (running) {
-                                sendRunningCommand("/unban $safe")
-                            } else {
-                                runOfflineAction { onUnbanOffline(profileId, safe, it) }
-                            }
-                        }
-                    }
-                }
-                if (running && !isOnline) {
-                    item {
-                        Text(
-                            "Ban requires the player to be online because Luanti stores IP bans. Admin changes for offline players require stopping the server so LuaNet can edit auth.sqlite safely.",
-                            style = MaterialTheme.typography.bodySmall,
+                            buildList {
+                                add(if (isOnline) "Online" else "Offline")
+                                if (player.admin) add("Admin")
+                                if (player.banned) add("Banned")
+                                add(if (running) "Server running" else "Server stopped")
+                            }.joinToString(" · "),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    }
-                }
-                item { HorizontalDivider() }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Make admin", safe.isNotBlank() && !player.admin) {
-                            if (running && isOnline) {
-                                sendRunningCommand("/grant $safe all")
-                            } else if (running) {
-                                actionMessage = "Stop the server before changing admin privileges for an offline player. LuaNet will not fake this action with a command that Luanti may reject."
-                            } else {
-                                runOfflineAction { onSetAdminOffline(profileId, safe, true, it) }
-                            }
+                        if (actionMessage != null) {
+                            Text(
+                                actionMessage.orEmpty(),
+                                color = if (messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
-                        PlayerActionButton("Remove admin", safe.isNotBlank() && player.admin) {
-                            if (running && isOnline) {
-                                sendRunningCommand("/revoke $safe all")
-                            } else if (running) {
-                                actionMessage = "Stop the server before changing admin privileges for an offline player. LuaNet will not fake this action with a command that Luanti may reject."
-                            } else {
-                                runOfflineAction { onSetAdminOffline(profileId, safe, false, it) }
-                            }
-                        }
-                    }
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Grant interact", running && safe.isNotBlank()) { sendRunningCommand("/grant $safe interact") }
-                        PlayerActionButton("Revoke interact", running && safe.isNotBlank()) { sendRunningCommand("/revoke $safe interact") }
-                    }
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Grant shout", running && safe.isNotBlank()) { sendRunningCommand("/grant $safe shout") }
-                        PlayerActionButton("Revoke shout", running && safe.isNotBlank()) { sendRunningCommand("/revoke $safe shout") }
-                    }
-                }
-                item {
-                    OutlinedTextField(
-                        value = customPrivilege,
-                        onValueChange = { customPrivilege = it.safePrivilegeName() },
-                        label = { Text("Custom privilege") },
-                        placeholder = { Text("fly, fast, teleport...") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Grant custom", running && safe.isNotBlank() && customPrivilege.isNotBlank()) {
-                            sendRunningCommand("/grant $safe ${customPrivilege.trim()}")
-                        }
-                        PlayerActionButton("Revoke custom", running && safe.isNotBlank() && customPrivilege.isNotBlank()) {
-                            sendRunningCommand("/revoke $safe ${customPrivilege.trim()}")
-                        }
-                    }
-                }
-                item { HorizontalDivider() }
-                item {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Show privileges", running && safe.isNotBlank()) { sendRunningCommand("/privs $safe") }
-                        PlayerActionButton("Copy name", true) { onCopyName() }
                     }
                 }
             }
-        },
-        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
-    )
+            item {
+                Card {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Moderation", style = MaterialTheme.typography.titleLarge)
+                        OutlinedTextField(
+                            value = kickReason,
+                            onValueChange = { kickReason = it.replace("\n", " ").take(120) },
+                            label = { Text("Kick reason") },
+                            placeholder = { Text("Optional") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PlayerActionButton("Kick", running && isOnline && safe.isNotBlank()) { sendRunningCommand("/kick $safe") }
+                            PlayerActionButton("Kick with reason", running && isOnline && safe.isNotBlank() && kickReason.isNotBlank()) {
+                                sendRunningCommand("/kick $safe ${kickReason.trim()}")
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PlayerActionButton("Ban", running && isOnline && safe.isNotBlank() && !player.banned) { sendRunningCommand("/ban $safe") }
+                            PlayerActionButton("Unban", safe.isNotBlank() && (running || player.banned)) {
+                                if (running) sendRunningCommand("/unban $safe") else runOfflineAction { onUnbanOffline(profileId, safe, it) }
+                            }
+                        }
+                        if (running && !isOnline) {
+                            Text(
+                                "Ban needs the player online because Luanti bans IPs. Privilege changes for offline players require the server stopped.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+            item {
+                Card {
+                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Admin preset", style = MaterialTheme.typography.titleLarge)
+                        Text("Use this for full server admin. For precise control, use the privilege toggles below.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            PlayerActionButton("Grant admin preset", safe.isNotBlank() && !player.admin) {
+                                if (running && isOnline) sendRunningCommand("/grant $safe all")
+                                else if (running) offlineOnlyError()
+                                else runOfflineAction { onSetAdminOffline(profileId, safe, true, it) }
+                            }
+                            PlayerActionButton("Refresh from server", running && safe.isNotBlank()) { sendRunningCommand("/privs $safe") }
+                        }
+                    }
+                }
+            }
+            item {
+                Text("Privileges", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "Toggles change real Luanti privileges. Online players use /grant and /revoke; offline players require the server stopped.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            items(COMMON_PLAYER_PRIVILEGES) { privilege ->
+                PrivilegeToggleRow(
+                    privilege = privilege,
+                    checked = privilege.key in currentPrivileges,
+                    enabled = safe.isNotBlank() && (isOnline || !running),
+                    onCheckedChange = { checked -> changePrivilege(privilege.key, checked) },
+                )
+            }
+            item {
+                FilledTonalButton(onClick = { copy(context, player.name) }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.ContentCopy, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Copy player name")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PrivilegeToggleRow(
+    privilege: PlayerPrivilege,
+    checked: Boolean,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(privilege.title, style = MaterialTheme.typography.titleMedium)
+                Text("${privilege.key} · ${privilege.detail}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Switch(checked = checked, enabled = enabled, onCheckedChange = onCheckedChange)
+        }
+    }
 }
 
 @Composable
@@ -1019,6 +1031,32 @@ private fun RowScope.PlayerActionButton(label: String, enabled: Boolean, onClick
 
 private fun String.safePlayerName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)
 private fun String.safePrivilegeName(): String = filter { it.isLetterOrDigit() || it == '_' }.take(32)
+private fun String.privilegeSet(): Set<String> = split(',')
+    .map { it.trim().safePrivilegeName() }
+    .filterTo(linkedSetOf()) { it.isNotBlank() }
+
+private data class PlayerPrivilege(val key: String, val title: String, val detail: String)
+
+private val COMMON_PLAYER_PRIVILEGES = listOf(
+    PlayerPrivilege("interact", "Interact", "Build, dig, use items"),
+    PlayerPrivilege("shout", "Shout", "Speak in chat"),
+    PlayerPrivilege("basic_privs", "Basic privileges", "Grant/revoke basic privileges"),
+    PlayerPrivilege("privs", "Privileges admin", "Modify all privileges"),
+    PlayerPrivilege("server", "Server maintenance", "Server maintenance commands"),
+    PlayerPrivilege("ban", "Ban", "Ban and unban players"),
+    PlayerPrivilege("kick", "Kick", "Kick players"),
+    PlayerPrivilege("teleport", "Teleport", "Teleport self"),
+    PlayerPrivilege("bring", "Bring", "Teleport other players"),
+    PlayerPrivilege("give", "Give", "Use give/giveme inventory commands"),
+    PlayerPrivilege("password", "Password", "Set or clear player passwords"),
+    PlayerPrivilege("fly", "Fly", "Use fly mode"),
+    PlayerPrivilege("fast", "Fast", "Use fast movement"),
+    PlayerPrivilege("noclip", "Noclip", "Fly through solid nodes"),
+    PlayerPrivilege("settime", "Set time", "Change world time"),
+    PlayerPrivilege("rollback", "Rollback", "Use rollback tools"),
+    PlayerPrivilege("debug", "Debug", "Use debug/wireframe privileges"),
+    PlayerPrivilege("protection_bypass", "Protection bypass", "Bypass protected nodes"),
+)
 
 @Composable
 private fun EmptySection(icon: ImageVector, title: String, detail: String) {

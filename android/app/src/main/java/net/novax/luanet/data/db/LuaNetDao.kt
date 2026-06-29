@@ -64,10 +64,13 @@ interface LuaNetDao {
     suspend fun markAllPlayersOffline(profileId: String, seenAt: Long)
 
     @Query("UPDATE server_players SET banned=:banned WHERE profileId=:profileId AND name=:name")
-    suspend fun updatePlayerBanned(profileId: String, name: String, banned: Boolean)
+    suspend fun updatePlayerBanned(profileId: String, name: String, banned: Boolean): Int
 
     @Query("UPDATE server_players SET admin=:admin WHERE profileId=:profileId AND name=:name")
-    suspend fun updatePlayerAdmin(profileId: String, name: String, admin: Boolean)
+    suspend fun updatePlayerAdmin(profileId: String, name: String, admin: Boolean): Int
+
+    @Query("UPDATE server_players SET admin=:admin, privileges=:privileges WHERE profileId=:profileId AND name=:name")
+    suspend fun updatePlayerPrivileges(profileId: String, name: String, admin: Boolean, privileges: String): Int
 
     @Query("SELECT * FROM server_config_settings WHERE profileId=:profileId ORDER BY key")
     fun observeConfigSettings(profileId: String): Flow<List<ServerConfigSettingEntity>>

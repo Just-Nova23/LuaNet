@@ -106,6 +106,7 @@ data class ServerPlayerEntity(
     val online: Boolean,
     val banned: Boolean,
     val admin: Boolean,
+    val privileges: String,
 )
 
 @Entity(

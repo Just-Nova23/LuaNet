@@ -14,7 +14,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         ServerPlayerEntity::class,
         ServerConfigSettingEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -72,6 +72,12 @@ abstract class LuaNetDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
                 database.execSQL("CREATE INDEX IF NOT EXISTS index_server_config_settings_profileId ON server_config_settings(profileId)")
+            }
+        }
+
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE server_players ADD COLUMN privileges TEXT NOT NULL DEFAULT ''")
             }
         }
     }

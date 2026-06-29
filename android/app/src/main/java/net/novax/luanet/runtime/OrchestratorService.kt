@@ -545,13 +545,18 @@ class OrchestratorService : Service() {
         val kind = when (action) {
             "ban" -> PendingPlayerActionKind.BAN
             "unban" -> PendingPlayerActionKind.UNBAN
-            "grant" -> if (parts.drop(2).joinToString(" ").equals("all", ignoreCase = true)) {
-                PendingPlayerActionKind.MAKE_ADMIN
+            "grant" -> if (parts.drop(2).joinToString(" ").isNotBlank()) {
+                PendingPlayerActionKind.PRIVILEGES
             } else {
                 null
             }
-            "revoke" -> if (parts.drop(2).joinToString(" ").equals("all", ignoreCase = true)) {
-                PendingPlayerActionKind.REMOVE_ADMIN
+            "revoke" -> if (parts.drop(2).joinToString(" ").isNotBlank()) {
+                PendingPlayerActionKind.PRIVILEGES
+            } else {
+                null
+            }
+            "privs" -> if (parts.size >= 2) {
+                PendingPlayerActionKind.PRIVILEGES
             } else {
                 null
             }
@@ -584,16 +589,12 @@ class OrchestratorService : Service() {
                 continue
             }
             when (action.kind) {
-                PendingPlayerActionKind.MAKE_ADMIN -> if (message.startsWith("Privileges of $player:", ignoreCase = true)) {
-                    scope.launch { repository.markPlayerAdmin(profileId, player, true) }
-                    iterator.remove()
-                }
-                PendingPlayerActionKind.REMOVE_ADMIN -> if (
-                    message.startsWith("Privileges of $player:", ignoreCase = true) ||
-                    message.startsWith("$player does not have any privileges.", ignoreCase = true)
-                ) {
-                    scope.launch { repository.markPlayerAdmin(profileId, player, false) }
-                    iterator.remove()
+                PendingPlayerActionKind.PRIVILEGES -> {
+                    val privileges = parsePrivilegesMessage(message, player)
+                    if (privileges != null) {
+                        scope.launch { repository.markPlayerPrivileges(profileId, player, privileges) }
+                        iterator.remove()
+                    }
                 }
                 PendingPlayerActionKind.BAN -> if (message.startsWith("Banned ", ignoreCase = true) && playerLower in lower) {
                     scope.launch { repository.markPlayerBanned(profileId, player, true) }
@@ -608,6 +609,16 @@ class OrchestratorService : Service() {
         if (pending.isEmpty()) pendingPlayerActions.remove(profileId)
     }
 
+    private fun parsePrivilegesMessage(message: String, player: String): Set<String>? {
+        if (message.startsWith("$player does not have any privileges.", ignoreCase = true)) return emptySet()
+        val prefix = "Privileges of $player:"
+        if (!message.startsWith(prefix, ignoreCase = true)) return null
+        return message.substringAfter(':')
+            .split(',')
+            .map { it.trim().filter { char -> char.isLetterOrDigit() || char == '_' }.take(32) }
+            .filterTo(linkedSetOf()) { it.isNotBlank() }
+    }
+
     private data class PendingPlayerAction(
         val kind: PendingPlayerActionKind,
         val player: String,
@@ -615,8 +626,7 @@ class OrchestratorService : Service() {
     )
 
     private enum class PendingPlayerActionKind {
-        MAKE_ADMIN,
-        REMOVE_ADMIN,
+        PRIVILEGES,
         BAN,
         UNBAN,
     }

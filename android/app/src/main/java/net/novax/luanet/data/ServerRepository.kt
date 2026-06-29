@@ -218,6 +218,7 @@ class ServerRepository(
             online = true,
             banned = existing?.banned ?: false,
             admin = existing?.admin ?: false,
+            privileges = existing?.privileges.orEmpty(),
         ))
     }
 
@@ -230,8 +231,31 @@ class ServerRepository(
     }
 
     suspend fun markAllPlayersOffline(profileId: String) = dao.markAllPlayersOffline(profileId, System.currentTimeMillis())
-    suspend fun markPlayerBanned(profileId: String, rawName: String, banned: Boolean) = dao.updatePlayerBanned(profileId, rawName.safePlayerName(), banned)
-    suspend fun markPlayerAdmin(profileId: String, rawName: String, admin: Boolean) = dao.updatePlayerAdmin(profileId, rawName.safePlayerName(), admin)
+    suspend fun markPlayerBanned(profileId: String, rawName: String, banned: Boolean) {
+        val name = rawName.safePlayerName()
+        if (name.isBlank()) return
+        if (dao.updatePlayerBanned(profileId, name, banned) == 0) {
+            upsertLocalPlayer(profileId, name, online = false, banned = banned)
+        }
+    }
+
+    suspend fun markPlayerAdmin(profileId: String, rawName: String, admin: Boolean) {
+        val name = rawName.safePlayerName()
+        if (name.isBlank()) return
+        val privileges = if (admin) DEFAULT_ADMIN_PRIVILEGES else emptySet()
+        markPlayerPrivileges(profileId, name, privileges)
+    }
+
+    suspend fun markPlayerPrivileges(profileId: String, rawName: String, privileges: Set<String>) {
+        val name = rawName.safePlayerName()
+        if (name.isBlank()) return
+        val clean = privileges.cleanPrivilegeSet()
+        val admin = clean.isAdminPrivilegeSet()
+        val serialized = clean.joinToString(",")
+        if (dao.updatePlayerPrivileges(profileId, name, admin, serialized) == 0) {
+            upsertLocalPlayer(profileId, name, online = false, admin = admin, privileges = serialized)
+        }
+    }
 
     suspend fun setPlayerAdminOffline(profileId: String, rawName: String, admin: Boolean): String = withContext(Dispatchers.IO) {
         val name = rawName.safePlayerName()
@@ -240,9 +264,23 @@ class ServerRepository(
         require(profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)) {
             "Stop the server before editing offline privileges directly"
         }
-        updateAuthSqliteAdmin(profile, name, admin)
-        dao.updatePlayerAdmin(profileId, name, admin)
+        val privileges = updateAuthSqliteAdmin(profile, name, admin)
+        markPlayerPrivileges(profileId, name, privileges)
         if (admin) "$name is now admin. Restart or start the server to use the updated privileges." else "$name admin privileges removed."
+    }
+
+    suspend fun setPlayerPrivilegeOffline(profileId: String, rawName: String, privilege: String, enabled: Boolean): String = withContext(Dispatchers.IO) {
+        val name = rawName.safePlayerName()
+        val cleanPrivilege = privilege.safePrivilegeName()
+        require(name.isNotBlank()) { "Invalid player name" }
+        require(cleanPrivilege.isNotBlank()) { "Invalid privilege" }
+        val profile = requireNotNull(dao.profile(profileId)) { "Server profile not found" }
+        require(profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)) {
+            "Stop the server before editing offline privileges directly"
+        }
+        val privileges = updateAuthSqlitePrivilege(profile, name, cleanPrivilege, enabled)
+        markPlayerPrivileges(profileId, name, privileges)
+        if (enabled) "Granted $cleanPrivilege to $name." else "Revoked $cleanPrivilege from $name."
     }
 
     suspend fun unbanPlayerOffline(profileId: String, rawName: String): String = withContext(Dispatchers.IO) {
@@ -453,7 +491,29 @@ class ServerRepository(
             .sortedWith(compareBy<ServerModSetting> { it.source.lowercase() }.thenBy { it.title.lowercase() })
     }
 
-    private fun updateAuthSqliteAdmin(profile: ServerProfileEntity, name: String, admin: Boolean) {
+    private suspend fun upsertLocalPlayer(
+        profileId: String,
+        name: String,
+        online: Boolean = false,
+        banned: Boolean = false,
+        admin: Boolean = false,
+        privileges: String = "",
+    ) {
+        val now = System.currentTimeMillis()
+        val existing = dao.player(profileId, name)
+        dao.upsertPlayer(ServerPlayerEntity(
+            profileId = profileId,
+            name = name,
+            firstSeenAt = existing?.firstSeenAt ?: now,
+            lastSeenAt = now,
+            online = online || existing?.online == true,
+            banned = banned || existing?.banned == true,
+            admin = admin,
+            privileges = privileges.ifBlank { existing?.privileges.orEmpty() },
+        ))
+    }
+
+    private fun updateAuthSqliteAdmin(profile: ServerProfileEntity, name: String, admin: Boolean): Set<String> {
         val authFile = File(profileDirectory(profile.id), "world/auth.sqlite")
         require(authFile.isFile) {
             "Luanti auth.sqlite does not exist yet. Start this server once and let the player join before editing offline privileges."
@@ -465,22 +525,51 @@ class ServerRepository(
                 "Player $name has no Luanti auth record. They must join once before offline privileges can be edited."
             }
             database.delete("user_privileges", "id = ?", arrayOf(playerId.toString()))
-            val privileges = if (admin) adminPrivilegesFor(profile.id, database) else profile.defaultPrivileges.privilegeSet()
-            privileges.forEach { privilege ->
-                database.insertWithOnConflict(
-                    "user_privileges",
-                    null,
-                    ContentValues().apply {
-                        put("id", playerId)
-                        put("privilege", privilege)
-                    },
-                    SQLiteDatabase.CONFLICT_IGNORE,
-                )
-            }
+            val privileges = (if (admin) adminPrivilegesFor(profile.id, database) else profile.defaultPrivileges.privilegeSet()).cleanPrivilegeSet()
+            writePrivileges(database, playerId, privileges)
             database.setTransactionSuccessful()
+            return privileges
         } finally {
             runCatching { database.endTransaction() }
             database.close()
+        }
+    }
+
+    private fun updateAuthSqlitePrivilege(profile: ServerProfileEntity, name: String, privilege: String, enabled: Boolean): Set<String> {
+        val authFile = File(profileDirectory(profile.id), "world/auth.sqlite")
+        require(authFile.isFile) {
+            "Luanti auth.sqlite does not exist yet. Start this server once and let the player join before editing offline privileges."
+        }
+        val database = SQLiteDatabase.openDatabase(authFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            database.beginTransaction()
+            val playerId = requireNotNull(authId(database, name)) {
+                "Player $name has no Luanti auth record. They must join once before offline privileges can be edited."
+            }
+            val privileges = privilegesFor(database, playerId).toMutableSet()
+            if (enabled) privileges += privilege else privileges -= privilege
+            val clean = privileges.cleanPrivilegeSet()
+            database.delete("user_privileges", "id = ?", arrayOf(playerId.toString()))
+            writePrivileges(database, playerId, clean)
+            database.setTransactionSuccessful()
+            return clean
+        } finally {
+            runCatching { database.endTransaction() }
+            database.close()
+        }
+    }
+
+    private fun writePrivileges(database: SQLiteDatabase, playerId: Long, privileges: Set<String>) {
+        privileges.forEach { privilege ->
+            database.insertWithOnConflict(
+                "user_privileges",
+                null,
+                ContentValues().apply {
+                    put("id", playerId)
+                    put("privilege", privilege)
+                },
+                SQLiteDatabase.CONFLICT_IGNORE,
+            )
         }
     }
 
@@ -557,9 +646,13 @@ class ServerRepository(
 
     private fun String.safePlayerName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)
     private fun String.safeFolderName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(80)
+    private fun String.safePrivilegeName(): String = filter { it.isLetterOrDigit() || it == '_' }.take(32)
     private fun String.privilegeSet(): Set<String> = split(',')
-        .map { it.trim().filter { char -> char.isLetterOrDigit() || char == '_' } }
+        .map { it.trim().safePrivilegeName() }
+        .cleanPrivilegeSet()
+    private fun Iterable<String>.cleanPrivilegeSet(): Set<String> = map { it.safePrivilegeName() }
         .filterTo(linkedSetOf()) { it.isNotBlank() }
+    private fun Set<String>.isAdminPrivilegeSet(): Boolean = "server" in this && "privs" in this && "ban" in this && "kick" in this
     private fun String.toPrivilegeList(): String = split(',')
         .map { it.trim().filter { char -> char.isLetterOrDigit() || char == '_' } }
         .filter { it.isNotBlank() }
