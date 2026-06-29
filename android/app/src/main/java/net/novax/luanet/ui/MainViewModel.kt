@@ -110,6 +110,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setPlayerAdminOffline(profileId: String, playerName: String, admin: Boolean, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching { repository.setPlayerAdminOffline(profileId, playerName, admin) })
+        }
+    }
+
+    fun unbanPlayerOffline(profileId: String, playerName: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching { repository.unbanPlayerOffline(profileId, playerName) })
+        }
+    }
+
     fun importArchive(profileId: String, uri: Uri, kind: ImportKind, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
             setOperation(profileId, "Manual ZIP", "Reading selected ${kind.name.lowercase()} archive", indeterminate = true)

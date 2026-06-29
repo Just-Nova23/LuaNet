@@ -1,6 +1,8 @@
 package net.novax.luanet.data
 
 import android.content.Context
+import android.content.ContentValues
+import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
 import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
@@ -231,6 +233,30 @@ class ServerRepository(
     suspend fun markPlayerBanned(profileId: String, rawName: String, banned: Boolean) = dao.updatePlayerBanned(profileId, rawName.safePlayerName(), banned)
     suspend fun markPlayerAdmin(profileId: String, rawName: String, admin: Boolean) = dao.updatePlayerAdmin(profileId, rawName.safePlayerName(), admin)
 
+    suspend fun setPlayerAdminOffline(profileId: String, rawName: String, admin: Boolean): String = withContext(Dispatchers.IO) {
+        val name = rawName.safePlayerName()
+        require(name.isNotBlank()) { "Invalid player name" }
+        val profile = requireNotNull(dao.profile(profileId)) { "Server profile not found" }
+        require(profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)) {
+            "Stop the server before editing offline privileges directly"
+        }
+        updateAuthSqliteAdmin(profile, name, admin)
+        dao.updatePlayerAdmin(profileId, name, admin)
+        if (admin) "$name is now admin. Restart or start the server to use the updated privileges." else "$name admin privileges removed."
+    }
+
+    suspend fun unbanPlayerOffline(profileId: String, rawName: String): String = withContext(Dispatchers.IO) {
+        val name = rawName.safePlayerName()
+        require(name.isNotBlank()) { "Invalid player name" }
+        val profile = requireNotNull(dao.profile(profileId)) { "Server profile not found" }
+        require(profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)) {
+            "Stop the server before editing offline bans directly"
+        }
+        val removed = removePlayerFromIpBan(profile.id, name)
+        dao.updatePlayerBanned(profileId, name, false)
+        if (removed > 0) "Removed $removed ban entr${if (removed == 1) "y" else "ies"} for $name." else "No saved ban entry existed for $name."
+    }
+
     suspend fun saveModSetting(profileId: String, key: String, value: String) {
         saveConfigSetting(profileId, key, value)
     }
@@ -427,6 +453,74 @@ class ServerRepository(
             .sortedWith(compareBy<ServerModSetting> { it.source.lowercase() }.thenBy { it.title.lowercase() })
     }
 
+    private fun updateAuthSqliteAdmin(profile: ServerProfileEntity, name: String, admin: Boolean) {
+        val authFile = File(profileDirectory(profile.id), "world/auth.sqlite")
+        require(authFile.isFile) {
+            "Luanti auth.sqlite does not exist yet. Start this server once and let the player join before editing offline privileges."
+        }
+        val database = SQLiteDatabase.openDatabase(authFile.absolutePath, null, SQLiteDatabase.OPEN_READWRITE)
+        try {
+            database.beginTransaction()
+            val playerId = requireNotNull(authId(database, name)) {
+                "Player $name has no Luanti auth record. They must join once before offline privileges can be edited."
+            }
+            database.delete("user_privileges", "id = ?", arrayOf(playerId.toString()))
+            val privileges = if (admin) adminPrivilegesFor(profile.id, database) else profile.defaultPrivileges.privilegeSet()
+            privileges.forEach { privilege ->
+                database.insertWithOnConflict(
+                    "user_privileges",
+                    null,
+                    ContentValues().apply {
+                        put("id", playerId)
+                        put("privilege", privilege)
+                    },
+                    SQLiteDatabase.CONFLICT_IGNORE,
+                )
+            }
+            database.setTransactionSuccessful()
+        } finally {
+            runCatching { database.endTransaction() }
+            database.close()
+        }
+    }
+
+    private fun adminPrivilegesFor(profileId: String, database: SQLiteDatabase): Set<String> {
+        val consoleAdmin = "ln_admin_${profileId.take(8).filter { it.isLetterOrDigit() }}"
+        val consoleAdminId = authId(database, consoleAdmin)
+        val copied = consoleAdminId?.let { privilegesFor(database, it) }.orEmpty()
+        return (copied + DEFAULT_ADMIN_PRIVILEGES).filterTo(linkedSetOf()) { it.matches(SETTING_KEY) }
+    }
+
+    private fun authId(database: SQLiteDatabase, name: String): Long? {
+        database.rawQuery("SELECT id FROM auth WHERE name = ?", arrayOf(name)).use { cursor ->
+            return if (cursor.moveToFirst()) cursor.getLong(0) else null
+        }
+    }
+
+    private fun privilegesFor(database: SQLiteDatabase, id: Long): Set<String> {
+        val privileges = linkedSetOf<String>()
+        database.rawQuery("SELECT privilege FROM user_privileges WHERE id = ?", arrayOf(id.toString())).use { cursor ->
+            while (cursor.moveToNext()) {
+                cursor.getString(0)?.takeIf { it.matches(SETTING_KEY) }?.let(privileges::add)
+            }
+        }
+        return privileges
+    }
+
+    private fun removePlayerFromIpBan(profileId: String, name: String): Int {
+        val ipBan = File(profileDirectory(profileId), "world/ipban.txt")
+        if (!ipBan.isFile) return 0
+        val before = ipBan.readLines()
+        val after = before.filterNot { line ->
+            val parts = line.split('|', limit = 2)
+            parts.getOrNull(1)?.trim() == name
+        }
+        if (after.size != before.size) {
+            ipBan.writeText(after.joinToString(separator = "\n", postfix = if (after.isEmpty()) "" else "\n"))
+        }
+        return before.size - after.size
+    }
+
     private fun parseSettingTypes(file: File, source: String, saved: Map<String, String>): List<ServerModSetting> {
         if (!file.isFile) return emptyList()
         val result = mutableListOf<ServerModSetting>()
@@ -463,6 +557,9 @@ class ServerRepository(
 
     private fun String.safePlayerName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)
     private fun String.safeFolderName(): String = filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(80)
+    private fun String.privilegeSet(): Set<String> = split(',')
+        .map { it.trim().filter { char -> char.isLetterOrDigit() || char == '_' } }
+        .filterTo(linkedSetOf()) { it.isNotBlank() }
     private fun String.toPrivilegeList(): String = split(',')
         .map { it.trim().filter { char -> char.isLetterOrDigit() || char == '_' } }
         .filter { it.isNotBlank() }
@@ -486,5 +583,10 @@ class ServerRepository(
         private val SETTING_KEY = Regex("[A-Za-z0-9_.:-]{1,120}")
         private val SETTING_LINE = Regex("""^([A-Za-z0-9_.:-]+)\s*(?:\(([^)]*)\))?\s+([A-Za-z]+)(?:\s+(\S+))?.*$""")
         private val SUPPORTED_SETTING_TYPES = setOf("bool", "boolean", "int", "float", "string", "enum", "path")
+        private val DEFAULT_ADMIN_PRIVILEGES = setOf(
+            "interact", "shout", "privs", "basic_privs", "server", "ban", "kick", "teleport",
+            "bring", "fast", "fly", "noclip", "give", "settime", "rollback", "debug",
+            "password", "protection_bypass",
+        )
     }
 }

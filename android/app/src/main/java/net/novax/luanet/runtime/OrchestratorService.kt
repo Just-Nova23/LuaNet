@@ -48,6 +48,7 @@ class OrchestratorService : Service() {
     private val tunnels = mutableMapOf<String, BoundTunnel>()
     private val logcatTails = mutableMapOf<String, Job>()
     private val recentLogLines = mutableMapOf<String, Pair<String, Long>>()
+    private val pendingPlayerActions = mutableMapOf<String, MutableList<PendingPlayerAction>>()
     private val callback = Messenger(CallbackHandler())
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -255,7 +256,7 @@ class OrchestratorService : Service() {
         if (clean.isBlank()) return
         val command = if (clean.startsWith("/")) clean else "/$clean"
         val engine = sessions[profileId] ?: return
-        applyCommandSideEffects(profileId, command)
+        trackPendingPlayerAction(profileId, command)
         RuntimeRegistry.update(profileId) { previous ->
             previous?.copy(logs = (previous.logs + "> $command").takeLast(2_000))
         }
@@ -423,6 +424,7 @@ class OrchestratorService : Service() {
         }
         val line = rawLine.stripAndroidLogPrefix().trimEnd()
         appendLog(profileId, line)
+        applyConfirmedCommandResult(profileId, line)
         if (line.contains("listening on", ignoreCase = true) || line.contains("Server for gameid", ignoreCase = true)) {
             updateEngineState(profileId, "RUNNING")
         }
@@ -535,22 +537,88 @@ class OrchestratorService : Service() {
             ?.pid
     }
 
-    private fun applyCommandSideEffects(profileId: String, command: String) {
+    private fun trackPendingPlayerAction(profileId: String, command: String) {
         val parts = command.removePrefix("/").trim().split(Regex("\\s+")).filter { it.isNotBlank() }
         val action = parts.firstOrNull()?.lowercase() ?: return
         val player = parts.getOrNull(1)?.cleanPlayerName().orEmpty()
         if (player.isBlank()) return
-        when (action) {
-            "ban" -> scope.launch { repository.markPlayerBanned(profileId, player, true) }
-            "unban" -> scope.launch { repository.markPlayerBanned(profileId, player, false) }
-            "grant" -> if (parts.drop(2).joinToString(" ").contains("all", ignoreCase = true)) {
-                scope.launch { repository.markPlayerAdmin(profileId, player, true) }
+        val kind = when (action) {
+            "ban" -> PendingPlayerActionKind.BAN
+            "unban" -> PendingPlayerActionKind.UNBAN
+            "grant" -> if (parts.drop(2).joinToString(" ").equals("all", ignoreCase = true)) {
+                PendingPlayerActionKind.MAKE_ADMIN
+            } else {
+                null
             }
-            "revoke" -> if (parts.drop(2).joinToString(" ").contains("all", ignoreCase = true) ||
-                parts.drop(2).joinToString(" ").contains("server", ignoreCase = true)) {
-                scope.launch { repository.markPlayerAdmin(profileId, player, false) }
+            "revoke" -> if (parts.drop(2).joinToString(" ").equals("all", ignoreCase = true)) {
+                PendingPlayerActionKind.REMOVE_ADMIN
+            } else {
+                null
+            }
+            else -> null
+        } ?: return
+        pendingPlayerActions.getOrPut(profileId) { mutableListOf() } += PendingPlayerAction(kind, player, System.currentTimeMillis())
+    }
+
+    private fun applyConfirmedCommandResult(profileId: String, line: String) {
+        val message = line.substringAfter("Console:", missingDelimiterValue = "").trim()
+        if (message.isBlank()) return
+        val pending = pendingPlayerActions[profileId] ?: return
+        val now = System.currentTimeMillis()
+        pending.removeAll { now - it.createdAt > 30_000L }
+        val iterator = pending.iterator()
+        while (iterator.hasNext()) {
+            val action = iterator.next()
+            val player = action.player
+            val lower = message.lowercase()
+            val playerLower = player.lowercase()
+            val failureForPlayer = playerLower in lower && (
+                "does not exist" in lower ||
+                    "failed" in lower ||
+                    "insufficient" in lower ||
+                    "invalid parameters" in lower ||
+                    "not online" in lower
+                )
+            if (failureForPlayer) {
+                iterator.remove()
+                continue
+            }
+            when (action.kind) {
+                PendingPlayerActionKind.MAKE_ADMIN -> if (message.startsWith("Privileges of $player:", ignoreCase = true)) {
+                    scope.launch { repository.markPlayerAdmin(profileId, player, true) }
+                    iterator.remove()
+                }
+                PendingPlayerActionKind.REMOVE_ADMIN -> if (
+                    message.startsWith("Privileges of $player:", ignoreCase = true) ||
+                    message.startsWith("$player does not have any privileges.", ignoreCase = true)
+                ) {
+                    scope.launch { repository.markPlayerAdmin(profileId, player, false) }
+                    iterator.remove()
+                }
+                PendingPlayerActionKind.BAN -> if (message.startsWith("Banned ", ignoreCase = true) && playerLower in lower) {
+                    scope.launch { repository.markPlayerBanned(profileId, player, true) }
+                    iterator.remove()
+                }
+                PendingPlayerActionKind.UNBAN -> if (message.startsWith("Unbanned ", ignoreCase = true) && playerLower in lower) {
+                    scope.launch { repository.markPlayerBanned(profileId, player, false) }
+                    iterator.remove()
+                }
             }
         }
+        if (pending.isEmpty()) pendingPlayerActions.remove(profileId)
+    }
+
+    private data class PendingPlayerAction(
+        val kind: PendingPlayerActionKind,
+        val player: String,
+        val createdAt: Long,
+    )
+
+    private enum class PendingPlayerActionKind {
+        MAKE_ADMIN,
+        REMOVE_ADMIN,
+        BAN,
+        UNBAN,
     }
 
     private fun writeConfig(

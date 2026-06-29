@@ -202,6 +202,8 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 onCreateBackup = viewModel::createBackup,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
                 onStopPublicTunnel = viewModel::stopPublicTunnel,
+                onSetPlayerAdminOffline = viewModel::setPlayerAdminOffline,
+                onUnbanPlayerOffline = viewModel::unbanPlayerOffline,
             )
         }
         is Destination.ContentLibrary -> {
@@ -635,6 +637,8 @@ private fun Dashboard(
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
+    onSetPlayerAdminOffline: (String, String, Boolean, (Result<String>) -> Unit) -> Unit,
+    onUnbanPlayerOffline: (String, String, (Result<String>) -> Unit) -> Unit,
 ) {
     if (profile == null) return
     val context = LocalContext.current
@@ -688,9 +692,15 @@ private fun Dashboard(
                 DashboardTabKey.CONSOLE -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
                 }
-                DashboardTabKey.PLAYERS -> PlayersPanel(players, runtime?.players.orEmpty(), running) { command ->
-                    OrchestratorService.command(context, profile.id, command)
-                }
+                DashboardTabKey.PLAYERS -> PlayersPanel(
+                    profileId = profile.id,
+                    players = players,
+                    runtimePlayers = runtime?.players.orEmpty(),
+                    running = running,
+                    onCommand = { command -> OrchestratorService.command(context, profile.id, command) },
+                    onSetAdminOffline = onSetPlayerAdminOffline,
+                    onUnbanOffline = onUnbanPlayerOffline,
+                )
                 DashboardTabKey.CONTENT -> ContentSummaryPanel(
                     profile = profile,
                     installedPackages = installedPackages,
@@ -758,13 +768,16 @@ private fun ConsolePanel(
 
 @Composable
 private fun PlayersPanel(
+    profileId: String,
     players: List<ServerPlayerEntity>,
     runtimePlayers: Set<String>,
     running: Boolean,
     onCommand: (String) -> Unit,
+    onSetAdminOffline: (String, String, Boolean, (Result<String>) -> Unit) -> Unit,
+    onUnbanOffline: (String, String, (Result<String>) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
-    var selectedPlayer by remember { mutableStateOf<ServerPlayerEntity?>(null) }
+    var selectedPlayerName by remember { mutableStateOf<String?>(null) }
     val merged = remember(players, runtimePlayers) {
         val byName = players.associateBy { it.name }.toMutableMap()
         runtimePlayers.forEach { name ->
@@ -789,7 +802,7 @@ private fun PlayersPanel(
             items(merged) { player ->
                 val isOnline = player.online || player.name in runtimePlayers
                 Card(
-                    modifier = Modifier.fillMaxWidth().clickable { selectedPlayer = player },
+                    modifier = Modifier.fillMaxWidth().clickable { selectedPlayerName = player.name },
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                 ) {
                     Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -815,30 +828,50 @@ private fun PlayersPanel(
             }
         }
     }
-    selectedPlayer?.let { player ->
+    selectedPlayerName?.let { name ->
+        val player = merged.firstOrNull { it.name == name }
+        if (player == null) {
+            selectedPlayerName = null
+            return@let
+        }
         PlayerActionsDialog(
+            profileId = profileId,
             player = player,
             isOnline = player.online || player.name in runtimePlayers,
             running = running,
-            onDismiss = { selectedPlayer = null },
+            onDismiss = { selectedPlayerName = null },
             onCopyName = { copy(context, player.name) },
             onCommand = onCommand,
+            onSetAdminOffline = onSetAdminOffline,
+            onUnbanOffline = onUnbanOffline,
         )
     }
 }
 
 @Composable
 private fun PlayerActionsDialog(
+    profileId: String,
     player: ServerPlayerEntity,
     isOnline: Boolean,
     running: Boolean,
     onDismiss: () -> Unit,
     onCopyName: () -> Unit,
     onCommand: (String) -> Unit,
+    onSetAdminOffline: (String, String, Boolean, (Result<String>) -> Unit) -> Unit,
+    onUnbanOffline: (String, String, (Result<String>) -> Unit) -> Unit,
 ) {
     val safe = player.name.safePlayerName()
     var kickReason by remember(player.name) { mutableStateOf("") }
     var customPrivilege by remember(player.name) { mutableStateOf("") }
+    var actionMessage by remember(player.name) { mutableStateOf<String?>(null) }
+    val sendRunningCommand: (String) -> Unit = { command ->
+        onCommand(command)
+        actionMessage = "Command sent. LuaNet will update this player only after Luanti confirms it in Console."
+    }
+    val runOfflineAction: (((Result<String>) -> Unit) -> Unit) -> Unit = { action ->
+        actionMessage = "Applying offline change..."
+        action { result -> actionMessage = result.fold({ it }, { it.message ?: "Action failed" }) }
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(player.name) },
@@ -855,6 +888,22 @@ private fun PlayerActionsDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                actionMessage?.let { message ->
+                    item {
+                        Text(
+                            message,
+                            color = if (
+                                message.contains("failed", ignoreCase = true) ||
+                                message.contains("does not", ignoreCase = true) ||
+                                message.contains("must join", ignoreCase = true)
+                            ) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
                 item {
                     OutlinedTextField(
                         value = kickReason,
@@ -867,35 +916,62 @@ private fun PlayerActionsDialog(
                 }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Kick", running && isOnline && safe.isNotBlank()) { onCommand("/kick $safe") }
+                        PlayerActionButton("Kick", running && isOnline && safe.isNotBlank()) { sendRunningCommand("/kick $safe") }
                         PlayerActionButton("Kick with reason", running && isOnline && safe.isNotBlank() && kickReason.isNotBlank()) {
-                            onCommand("/kick $safe ${kickReason.trim()}")
+                            sendRunningCommand("/kick $safe ${kickReason.trim()}")
                         }
                     }
                 }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Ban", running && safe.isNotBlank() && !player.banned) { onCommand("/ban $safe") }
-                        PlayerActionButton("Unban", running && safe.isNotBlank()) { onCommand("/unban $safe") }
+                        PlayerActionButton("Ban", running && isOnline && safe.isNotBlank() && !player.banned) { sendRunningCommand("/ban $safe") }
+                        PlayerActionButton("Unban", safe.isNotBlank() && (running || player.banned)) {
+                            if (running) {
+                                sendRunningCommand("/unban $safe")
+                            } else {
+                                runOfflineAction { onUnbanOffline(profileId, safe, it) }
+                            }
+                        }
+                    }
+                }
+                if (running && !isOnline) {
+                    item {
+                        Text(
+                            "Ban requires the player to be online because Luanti stores IP bans. Admin changes can still target offline players if they already have an auth record.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                 }
                 item { HorizontalDivider() }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Make admin", running && safe.isNotBlank() && !player.admin) { onCommand("/grant $safe all") }
-                        PlayerActionButton("Remove admin", running && safe.isNotBlank() && player.admin) { onCommand("/revoke $safe all") }
+                        PlayerActionButton("Make admin", safe.isNotBlank() && !player.admin) {
+                            if (running) {
+                                sendRunningCommand("/grant $safe all")
+                            } else {
+                                runOfflineAction { onSetAdminOffline(profileId, safe, true, it) }
+                            }
+                        }
+                        PlayerActionButton("Remove admin", safe.isNotBlank() && player.admin) {
+                            if (running) {
+                                sendRunningCommand("/revoke $safe all")
+                            } else {
+                                runOfflineAction { onSetAdminOffline(profileId, safe, false, it) }
+                            }
+                        }
                     }
                 }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Grant interact", running && safe.isNotBlank()) { onCommand("/grant $safe interact") }
-                        PlayerActionButton("Revoke interact", running && safe.isNotBlank()) { onCommand("/revoke $safe interact") }
+                        PlayerActionButton("Grant interact", running && safe.isNotBlank()) { sendRunningCommand("/grant $safe interact") }
+                        PlayerActionButton("Revoke interact", running && safe.isNotBlank()) { sendRunningCommand("/revoke $safe interact") }
                     }
                 }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Grant shout", running && safe.isNotBlank()) { onCommand("/grant $safe shout") }
-                        PlayerActionButton("Revoke shout", running && safe.isNotBlank()) { onCommand("/revoke $safe shout") }
+                        PlayerActionButton("Grant shout", running && safe.isNotBlank()) { sendRunningCommand("/grant $safe shout") }
+                        PlayerActionButton("Revoke shout", running && safe.isNotBlank()) { sendRunningCommand("/revoke $safe shout") }
                     }
                 }
                 item {
@@ -911,17 +987,17 @@ private fun PlayerActionsDialog(
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         PlayerActionButton("Grant custom", running && safe.isNotBlank() && customPrivilege.isNotBlank()) {
-                            onCommand("/grant $safe ${customPrivilege.trim()}")
+                            sendRunningCommand("/grant $safe ${customPrivilege.trim()}")
                         }
                         PlayerActionButton("Revoke custom", running && safe.isNotBlank() && customPrivilege.isNotBlank()) {
-                            onCommand("/revoke $safe ${customPrivilege.trim()}")
+                            sendRunningCommand("/revoke $safe ${customPrivilege.trim()}")
                         }
                     }
                 }
                 item { HorizontalDivider() }
                 item {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayerActionButton("Show privileges", running && safe.isNotBlank()) { onCommand("/privs $safe") }
+                        PlayerActionButton("Show privileges", running && safe.isNotBlank()) { sendRunningCommand("/privs $safe") }
                         PlayerActionButton("Copy name", true) { onCopyName() }
                     }
                 }
