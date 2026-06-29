@@ -13,8 +13,8 @@ NovaX. Public game packets pass through the NovaX relay in transit but are not r
 
 Crash reporting is disabled unless the user opts in. LuaNet does not perform behavioural
 analytics. The EEA consent flow is shown before AdMob is used. LAN hosting never displays an
-advertisement. Google, Firebase, Google Play, AdMob, and ContentDB process data under their
-own terms when the corresponding feature is used.
+advertisement. Google, GitHub, Firebase, Google Play, AdMob, and ContentDB process data under
+their own terms when the corresponding feature is used.
 
 Users can delete their cloud account from the app; this revokes active tunnels and removes
 account, device, lease, and entitlement records, except records that must temporarily remain

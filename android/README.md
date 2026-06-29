@@ -57,8 +57,8 @@ the new stable key.
 
 LAN hosting does not depend on external services. NovaX public access and Premium use:
 
-- Firebase Auth for Google sign-in, email/password sign-in, verified-email enforcement, ID
-  tokens, sign-out, and account deletion.
+- Firebase Auth for Google sign-in, GitHub sign-in, email/password sign-in, verified-email
+  enforcement, ID tokens, sign-out, and account deletion.
 - AdMob UMP plus one interstitial before each Free public-tunnel start. Ad load failure must
   never block hosting; Premium skips ads.
 - Play Billing subscriptions `luanet_premium_monthly` and `luanet_premium_yearly`. The app
@@ -68,11 +68,15 @@ LAN hosting does not depend on external services. NovaX public access and Premiu
 Release builds should provide:
 
 - `google-services.json` in `android/app/`;
-- `LUANET_GOOGLE_WEB_CLIENT_ID` for Credential Manager Google sign-in;
+- `LUANET_GOOGLE_WEB_CLIENT_ID` for Credential Manager Google sign-in, or a web OAuth client
+  in `google-services.json`;
 - `LUANET_ADMOB_APP_ID`;
 - `LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID`.
 
-Debug builds without Firebase can still use the account screen's `dev:<uid>` token field
-against a local development control plane. Production must use Firebase ID tokens.
+The account screen does not expose development bearer tokens. Production and local Firebase
+testing both use Firebase ID tokens.
+
+AdMob app IDs use `~`; interstitial ad unit IDs use `/`. A release build fails if
+`LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID` is accidentally set to an app ID.
 
 Do not commit `google-services.json`, signing keys, Firebase service accounts, or AdMob IDs.

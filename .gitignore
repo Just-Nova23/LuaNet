@@ -15,6 +15,7 @@ local.properties
 *.aab
 *.apks
 android/debug.keystore
+android/app/google-services.json
 *.jks
 *.keystore
 

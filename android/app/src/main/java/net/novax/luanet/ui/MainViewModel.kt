@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import net.novax.luanet.BuildConfig
 import net.novax.luanet.LuaNetApplication
 import net.novax.luanet.data.ArchiveCopyProgress
 import net.novax.luanet.data.ServerProfileSettingsUpdate
@@ -187,6 +186,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 container.accountGateway.signInWithGoogle(activity)
                 _account.value = currentAccountState()
                 "Signed in with Google"
+            })
+        }
+    }
+
+    fun signInWithGitHub(activity: Activity, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                container.accountGateway.signInWithGitHub(activity)
+                _account.value = currentAccountState()
+                "Signed in with GitHub"
             })
         }
     }
@@ -479,15 +488,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         expiresAt: String? = null,
     ): AccountState {
         val session = container.accountGateway.currentSession()
-        val devTokenConfigured = BuildConfig.DEBUG && container.authTokens.bearerToken() != null
         return AccountState(
             firebaseAvailable = session.available,
             signedIn = session.signedIn,
             email = session.email,
             displayName = session.displayName,
             emailVerified = session.emailVerified,
-            developerTokenConfigured = devTokenConfigured,
-            tokenConfigured = session.signedIn || devTokenConfigured,
+            tokenConfigured = session.signedIn,
             tier = tier,
             expiresAt = expiresAt,
         )
@@ -500,7 +507,6 @@ data class AccountState(
     val email: String? = null,
     val displayName: String? = null,
     val emailVerified: Boolean = false,
-    val developerTokenConfigured: Boolean = false,
     val tokenConfigured: Boolean = false,
     val tier: SubscriptionTier = SubscriptionTier.FREE,
     val expiresAt: String? = null,

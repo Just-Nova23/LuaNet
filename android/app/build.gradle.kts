@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import groovy.json.JsonSlurper
 
 plugins {
     id("com.android.application")
@@ -24,12 +25,26 @@ val luanetDebugKeyAlias = providers.gradleProperty("LUANET_DEBUG_KEY_ALIAS")
 val luanetDebugKeyPassword = providers.gradleProperty("LUANET_DEBUG_KEY_PASSWORD")
     .orElse(providers.environmentVariable("LUANET_DEBUG_KEY_PASSWORD"))
     .orElse(luanetDebugStorePassword)
+fun webClientIdFromGoogleServices(): String {
+    val file = project.file("google-services.json")
+    if (!file.isFile) return ""
+    val root = JsonSlurper().parse(file) as? Map<*, *> ?: return ""
+    val clients = root["client"] as? List<*> ?: return ""
+    return clients.asSequence()
+        .mapNotNull { it as? Map<*, *> }
+        .flatMap { client -> ((client["oauth_client"] as? List<*>) ?: emptyList<Any?>()).asSequence() }
+        .mapNotNull { it as? Map<*, *> }
+        .firstOrNull { it["client_type"]?.toString() == "3" }
+        ?.get("client_id")
+        ?.toString()
+        .orEmpty()
+}
 val googleWebClientId = providers.gradleProperty("LUANET_GOOGLE_WEB_CLIENT_ID")
     .orElse(providers.environmentVariable("LUANET_GOOGLE_WEB_CLIENT_ID"))
-    .orElse("")
+    .orElse(webClientIdFromGoogleServices())
 val admobAppId = providers.gradleProperty("LUANET_ADMOB_APP_ID")
     .orElse(providers.environmentVariable("LUANET_ADMOB_APP_ID"))
-    .orElse("ca-app-pub-3940256099942544~3347511713")
+    .orElse("ca-app-pub-1122211074280550~5618156743")
 val admobInterstitialId = providers.gradleProperty("LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID")
     .orElse(providers.environmentVariable("LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID"))
     .orElse("ca-app-pub-3940256099942544/1033173712")
@@ -67,7 +82,6 @@ android {
 
     buildTypes {
         debug {
-            applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
             if (luanetDebugKeystore?.isFile == true) {
                 signingConfig = signingConfigs.getByName("luanetDebug")
@@ -148,6 +162,9 @@ tasks.register("checkReleaseServiceConfig") {
         }
         if (admobInterstitialId.get().contains("3940256099942544")) {
             failures += "LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID must be the real LuaNet interstitial unit for release"
+        }
+        if (!admobInterstitialId.get().contains("/")) {
+            failures += "LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID must be an AdMob ad unit ID with '/', not an app ID with '~'"
         }
         if (failures.isNotEmpty()) {
             throw GradleException(failures.joinToString(separator = "\n"))

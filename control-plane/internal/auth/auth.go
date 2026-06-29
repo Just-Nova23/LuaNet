@@ -47,6 +47,9 @@ func (f *Firebase) Authenticate(ctx context.Context, bearer string) (model.Princ
 	if verified, ok := token.Claims["email_verified"].(bool); ok {
 		p.EmailVerified = verified
 	}
+	if token.Firebase.SignInProvider == "github.com" || token.Firebase.SignInProvider == "google.com" {
+		p.EmailVerified = true
+	}
 	return p, nil
 }
 
