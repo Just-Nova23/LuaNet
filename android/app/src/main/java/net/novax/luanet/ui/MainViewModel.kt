@@ -81,12 +81,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun players(profileId: String) = repository.observePlayers(profileId)
     fun advancedSettings(profileId: String) = repository.observeConfigSettings(profileId)
     fun modSettings(profileId: String) = repository.observeModSettings(profileId)
+    fun gameSettings(profileId: String) = repository.observeGameSettings(profileId)
 
     fun saveModSetting(profileId: String, key: String, value: String, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {
             onResult(runCatching {
                 repository.saveModSetting(profileId, key, value)
                 "Mod setting saved. Restart the server to apply it."
+            })
+        }
+    }
+
+    fun saveGameSetting(profileId: String, key: String, value: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                repository.saveConfigSetting(profileId, key, value)
+                "Game setting saved. Restart the server to apply it."
             })
         }
     }

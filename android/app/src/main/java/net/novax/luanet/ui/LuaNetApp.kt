@@ -143,6 +143,9 @@ private sealed interface Destination {
     data class Dashboard(val id: String) : Destination
     data class ContentLibrary(val id: String) : Destination
     data class ZipImport(val id: String) : Destination
+    data class AdvancedSettings(val id: String) : Destination
+    data class GameSettings(val id: String) : Destination
+    data class ModSettings(val id: String) : Destination
 }
 
 private typealias ServerSettingsSaver = (
@@ -181,20 +184,21 @@ fun LuaNetApp(viewModel: MainViewModel) {
         is Destination.Dashboard -> {
             val installedPackages by viewModel.installedPackages(current.id).collectAsStateWithLifecycle(emptyList())
             val players by viewModel.players(current.id).collectAsStateWithLifecycle(emptyList())
-            val advancedSettings by viewModel.advancedSettings(current.id).collectAsStateWithLifecycle(emptyList())
+            val gameSettings by viewModel.gameSettings(current.id).collectAsStateWithLifecycle(emptyList())
             val modSettings by viewModel.modSettings(current.id).collectAsStateWithLifecycle(emptyList())
             Dashboard(
                 profile = profiles.firstOrNull { it.id == current.id },
                 installedPackages = installedPackages,
                 players = players,
-                advancedSettings = advancedSettings,
-                modSettings = modSettings,
                 onBack = { destination = Destination.Servers },
                 onOpenContentLibrary = { destination = Destination.ContentLibrary(current.id) },
                 onOpenZipImport = { destination = Destination.ZipImport(current.id) },
+                onOpenAdvancedSettings = { destination = Destination.AdvancedSettings(current.id) },
+                onOpenGameSettings = { destination = Destination.GameSettings(current.id) },
+                onOpenModSettings = { destination = Destination.ModSettings(current.id) },
+                hasGameSettings = gameSettings.isNotEmpty(),
+                hasModSettings = modSettings.isNotEmpty(),
                 onSaveServerSettings = viewModel::updateServerSettings,
-                onSaveAdvancedSetting = viewModel::saveAdvancedSetting,
-                onSaveModSetting = viewModel::saveModSetting,
                 onCreateBackup = viewModel::createBackup,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
                 onStopPublicTunnel = viewModel::stopPublicTunnel,
@@ -221,6 +225,44 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 operation = content.operation,
                 onBack = { destination = Destination.Dashboard(current.id) },
                 onImport = viewModel::importArchive,
+            )
+        }
+        is Destination.AdvancedSettings -> {
+            val advancedSettings by viewModel.advancedSettings(current.id).collectAsStateWithLifecycle(emptyList())
+            AdvancedSettingsScreen(
+                profile = profiles.firstOrNull { it.id == current.id },
+                settings = advancedSettings,
+                onBack = { destination = Destination.Dashboard(current.id) },
+                onSaveServerSettings = viewModel::updateServerSettings,
+                onSaveAdvancedSetting = viewModel::saveAdvancedSetting,
+            )
+        }
+        is Destination.GameSettings -> {
+            val gameSettings by viewModel.gameSettings(current.id).collectAsStateWithLifecycle(emptyList())
+            PackageSettingsScreen(
+                profile = profiles.firstOrNull { it.id == current.id },
+                title = "Game settings",
+                description = "These values come from the installed game settingtypes.txt files and are written to minetest.conf. Restart the server to apply changes.",
+                emptyTitle = "No game settings",
+                emptyDetail = "The installed game does not expose settingtypes.txt options.",
+                icon = Icons.Default.Settings,
+                settings = gameSettings,
+                onBack = { destination = Destination.Dashboard(current.id) },
+                onSave = viewModel::saveGameSetting,
+            )
+        }
+        is Destination.ModSettings -> {
+            val modSettings by viewModel.modSettings(current.id).collectAsStateWithLifecycle(emptyList())
+            PackageSettingsScreen(
+                profile = profiles.firstOrNull { it.id == current.id },
+                title = "Mod settings",
+                description = "These values come from installed mod and modpack settingtypes.txt files and are written to minetest.conf. Restart the server to apply changes.",
+                emptyTitle = "No mod settings",
+                emptyDetail = "Installed mods do not expose settingtypes.txt options.",
+                icon = Icons.Default.Code,
+                settings = modSettings,
+                onBack = { destination = Destination.Dashboard(current.id) },
+                onSave = viewModel::saveModSetting,
             )
         }
     }
@@ -581,14 +623,15 @@ private fun Dashboard(
     profile: ServerProfileEntity?,
     installedPackages: List<InstalledPackageEntity>,
     players: List<ServerPlayerEntity>,
-    advancedSettings: List<ServerConfigSettingEntity>,
-    modSettings: List<ServerModSetting>,
     onBack: () -> Unit,
     onOpenContentLibrary: () -> Unit,
     onOpenZipImport: () -> Unit,
+    onOpenAdvancedSettings: () -> Unit,
+    onOpenGameSettings: () -> Unit,
+    onOpenModSettings: () -> Unit,
+    hasGameSettings: Boolean,
+    hasModSettings: Boolean,
     onSaveServerSettings: ServerSettingsSaver,
-    onSaveAdvancedSetting: (String, String, String, (Result<String>) -> Unit) -> Unit,
-    onSaveModSetting: (String, String, String, (Result<String>) -> Unit) -> Unit,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
@@ -605,8 +648,6 @@ private fun Dashboard(
         add(DashboardTab(DashboardTabKey.PLAYERS, "Players", Icons.Default.Group))
         add(DashboardTab(DashboardTabKey.CONTENT, "Content", Icons.Default.FolderZip))
         add(DashboardTab(DashboardTabKey.SETTINGS, "Settings", Icons.Default.Settings))
-        add(DashboardTab(DashboardTabKey.ADVANCED_SETTINGS, "Advanced", Icons.Default.Memory))
-        if (modSettings.isNotEmpty()) add(DashboardTab(DashboardTabKey.MOD_SETTINGS, "Mod settings", Icons.Default.Code))
         add(DashboardTab(DashboardTabKey.BACKUPS, "Backups", Icons.Default.Backup))
     }
     if (selectedTab > tabs.lastIndex) selectedTab = tabs.lastIndex
@@ -650,17 +691,24 @@ private fun Dashboard(
                 DashboardTabKey.PLAYERS -> PlayersPanel(players, runtime?.players.orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
                 }
-                DashboardTabKey.CONTENT -> ContentSummaryPanel(profile, installedPackages, onOpenContentLibrary, onOpenZipImport)
-                DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onSaveServerSettings)
-                DashboardTabKey.ADVANCED_SETTINGS -> AdvancedSettingsPanel(profile, advancedSettings, onSaveServerSettings, onSaveAdvancedSetting)
-                DashboardTabKey.MOD_SETTINGS -> ModSettingsPanel(profile, modSettings, onSaveModSetting)
+                DashboardTabKey.CONTENT -> ContentSummaryPanel(
+                    profile = profile,
+                    installedPackages = installedPackages,
+                    hasGameSettings = hasGameSettings,
+                    hasModSettings = hasModSettings,
+                    onOpenContentLibrary = onOpenContentLibrary,
+                    onOpenZipImport = onOpenZipImport,
+                    onOpenGameSettings = onOpenGameSettings,
+                    onOpenModSettings = onOpenModSettings,
+                )
+                DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onOpenAdvancedSettings, onSaveServerSettings)
                 DashboardTabKey.BACKUPS -> BackupPanel(profile, onCreateBackup)
             }
         }
     }
 }
 
-private enum class DashboardTabKey { OVERVIEW, CONSOLE, PLAYERS, CONTENT, SETTINGS, ADVANCED_SETTINGS, MOD_SETTINGS, BACKUPS }
+private enum class DashboardTabKey { OVERVIEW, CONSOLE, PLAYERS, CONTENT, SETTINGS, BACKUPS }
 private data class DashboardTab(val key: DashboardTabKey, val label: String, val icon: ImageVector)
 
 @Composable
@@ -904,8 +952,12 @@ private fun EmptySection(icon: ImageVector, title: String, detail: String) {
 private fun ContentSummaryPanel(
     profile: ServerProfileEntity,
     installedPackages: List<InstalledPackageEntity>,
+    hasGameSettings: Boolean,
+    hasModSettings: Boolean,
     onOpenContentLibrary: () -> Unit,
     onOpenZipImport: () -> Unit,
+    onOpenGameSettings: () -> Unit,
+    onOpenModSettings: () -> Unit,
 ) {
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item {
@@ -952,12 +1004,99 @@ private fun ContentSummaryPanel(
                 Text("Import ZIP archive")
             }
         }
+        if (hasGameSettings) {
+            item {
+                FilledTonalButton(
+                    onClick = onOpenGameSettings,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) {
+                    Icon(Icons.Default.Settings, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Open game settings")
+                }
+            }
+        }
+        if (hasModSettings) {
+            item {
+                FilledTonalButton(
+                    onClick = onOpenModSettings,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) {
+                    Icon(Icons.Default.Code, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Open installed mod settings")
+                }
+            }
+        }
         item {
             Text(
-                "Stop the server before changing games, mods, modpacks, or ZIP imports.",
+                "Stop the server before changing games, mods, modpacks, ZIP imports, or content-specific settings.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun AdvancedSettingsScreen(
+    profile: ServerProfileEntity?,
+    settings: List<ServerConfigSettingEntity>,
+    onBack: () -> Unit,
+    onSaveServerSettings: ServerSettingsSaver,
+    onSaveAdvancedSetting: (String, String, String, (Result<String>) -> Unit) -> Unit,
+) {
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text("Advanced settings") },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+        )
+    }) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            if (profile == null) {
+                EmptySection(Icons.Default.Memory, "Server not found", "Return to the server list and open the profile again.")
+            } else {
+                AdvancedSettingsPanel(profile, settings, onSaveServerSettings, onSaveAdvancedSetting)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PackageSettingsScreen(
+    profile: ServerProfileEntity?,
+    title: String,
+    description: String,
+    emptyTitle: String,
+    emptyDetail: String,
+    icon: ImageVector,
+    settings: List<ServerModSetting>,
+    onBack: () -> Unit,
+    onSave: (String, String, String, (Result<String>) -> Unit) -> Unit,
+) {
+    Scaffold(topBar = {
+        TopAppBar(
+            title = { Text(title) },
+            navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+        )
+    }) { padding ->
+        Box(Modifier.fillMaxSize().padding(padding)) {
+            if (profile == null) {
+                EmptySection(icon, "Server not found", "Return to the server list and open the profile again.")
+            } else {
+                PackageSettingsPanel(
+                    profile = profile,
+                    title = title,
+                    description = description,
+                    emptyTitle = emptyTitle,
+                    emptyDetail = emptyDetail,
+                    icon = icon,
+                    settings = settings,
+                    onSave = onSave,
+                )
+            }
         }
     }
 }
@@ -1628,8 +1767,13 @@ private fun BackupPanel(
 }
 
 @Composable
-private fun ModSettingsPanel(
+private fun PackageSettingsPanel(
     profile: ServerProfileEntity,
+    title: String,
+    description: String,
+    emptyTitle: String,
+    emptyDetail: String,
+    icon: ImageVector,
     settings: List<ServerModSetting>,
     onSave: (String, String, String, (Result<String>) -> Unit) -> Unit,
 ) {
@@ -1637,21 +1781,18 @@ private fun ModSettingsPanel(
     var values by remember(profile.id, settings) { mutableStateOf(settings.associate { it.key to it.value }) }
     var message by remember(profile.id) { mutableStateOf<String?>(null) }
     if (settings.isEmpty()) {
-        EmptySection(Icons.Default.Code, "No mod settings", "Installed mods do not expose settingtypes.txt options.")
+        EmptySection(icon, emptyTitle, emptyDetail)
         return
     }
     LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
-            Text("Mod settings", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "These values are written to minetest.conf from installed mod settingtypes.txt files. Restart the server to apply changes.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Text(title, style = MaterialTheme.typography.headlineSmall)
+            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (!canEdit) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                    Text("Stop the server before changing mod settings.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
+                    Text("Stop the server before changing these settings.", Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onErrorContainer)
                 }
             }
         }
@@ -1989,6 +2130,7 @@ private fun AdvancedSettingsPanel(
 private fun SettingsPanel(
     profile: ServerProfileEntity,
     installedPackages: List<InstalledPackageEntity>,
+    onOpenAdvancedSettings: () -> Unit,
     onSaveSettings: ServerSettingsSaver,
 ) {
     val canEdit = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
@@ -2026,6 +2168,16 @@ private fun SettingsPanel(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item { Text("Server settings", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            FilledTonalButton(
+                onClick = onOpenAdvancedSettings,
+                modifier = Modifier.fillMaxWidth().height(56.dp),
+            ) {
+                Icon(Icons.Default.Memory, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Open advanced settings")
+            }
+        }
         if (!canEdit) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {

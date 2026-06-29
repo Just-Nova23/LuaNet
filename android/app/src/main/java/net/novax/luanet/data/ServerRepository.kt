@@ -5,7 +5,7 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.data.db.LuaNetDao
@@ -115,8 +115,13 @@ class ServerRepository(
     suspend fun configSettings(profileId: String) = dao.configSettings(profileId)
     fun observeConfigSettings(profileId: String) = dao.observeConfigSettings(profileId)
     fun observeModSettings(profileId: String): Flow<List<ServerModSetting>> =
-        dao.observeConfigSettings(profileId).map { saved ->
-            modSettingDefinitions(profileId, packages(profileId), saved.associate { it.key to it.value })
+        combine(dao.observeConfigSettings(profileId), dao.observePackages(profileId)) { saved, packages ->
+            modSettingDefinitions(profileId, packages, saved.associate { it.key to it.value })
+        }
+
+    fun observeGameSettings(profileId: String): Flow<List<ServerModSetting>> =
+        combine(dao.observeConfigSettings(profileId), dao.observePackages(profileId)) { saved, packages ->
+            gameSettingDefinitions(profileId, packages, saved.associate { it.key to it.value })
         }
     suspend fun updateRuntime(id: String, state: ServerState, port: Int?) = dao.updateRuntime(id, state, port, System.currentTimeMillis())
     suspend fun updatePublic(id: String, enabled: Boolean, host: String?, port: Int?) =
@@ -395,6 +400,27 @@ class ServerRepository(
                     }
                 } else {
                     parseSettingTypes(File(root, "settingtypes.txt"), item.title, saved)
+                }
+            }
+            .distinctBy { it.key }
+            .sortedWith(compareBy<ServerModSetting> { it.source.lowercase() }.thenBy { it.title.lowercase() })
+    }
+
+    private fun gameSettingDefinitions(
+        profileId: String,
+        packages: List<InstalledPackageEntity>,
+        saved: Map<String, String>,
+    ): List<ServerModSetting> {
+        val gamesRoot = File(profileDirectory(profileId), "games")
+        return packages
+            .filter { it.enabled && it.type == PackageType.GAME }
+            .flatMap { item ->
+                val root = File(gamesRoot, item.packageKey.substringAfter('/').safeFolderName())
+                buildList {
+                    addAll(parseSettingTypes(File(root, "settingtypes.txt"), item.title, saved))
+                    File(root, "mods").listFiles()?.filter { it.isDirectory }.orEmpty().forEach { child ->
+                        addAll(parseSettingTypes(File(child, "settingtypes.txt"), "${item.title} / ${child.name}", saved))
+                    }
                 }
             }
             .distinctBy { it.key }
