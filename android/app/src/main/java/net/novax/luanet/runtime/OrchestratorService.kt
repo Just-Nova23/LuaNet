@@ -49,6 +49,8 @@ class OrchestratorService : Service() {
     private val logcatTails = mutableMapOf<String, Job>()
     private val recentLogLines = mutableMapOf<String, Pair<String, Long>>()
     private val pendingPlayerActions = mutableMapOf<String, MutableList<PendingPlayerAction>>()
+    private val privilegeVerificationJobs = mutableMapOf<String, Job>()
+    private val optimisticPrivilegeBaselines = mutableMapOf<String, Set<String>>()
     private val callback = Messenger(CallbackHandler())
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
@@ -271,6 +273,8 @@ class OrchestratorService : Service() {
         if (engine == null && state == "CRASHED") return
         stopPublicTunnel(profileId)
         logcatTails.remove(profileId)?.cancel()
+        clearPrivilegeVerification(profileId)
+        pendingPlayerActions.remove(profileId)
         if (engine != null) runCatching { unbindService(engine.connection) }
         val serverState = runCatching { ServerState.valueOf(state) }.getOrDefault(ServerState.CRASHED)
         scope.launch { repository.updateRuntime(profileId, serverState, null) }
@@ -542,31 +546,47 @@ class OrchestratorService : Service() {
         val action = parts.firstOrNull()?.lowercase() ?: return
         val player = parts.getOrNull(1)?.cleanPlayerName().orEmpty()
         if (player.isBlank()) return
-        val kind = when (action) {
-            "ban" -> PendingPlayerActionKind.BAN
-            "unban" -> PendingPlayerActionKind.UNBAN
-            "grant" -> if (parts.drop(2).joinToString(" ").isNotBlank()) {
-                PendingPlayerActionKind.PRIVILEGES
-            } else {
-                null
+        when (action) {
+            "ban" -> pendingPlayerActions.getOrPut(profileId) { mutableListOf() } +=
+                PendingPlayerAction(PendingPlayerActionKind.BAN, player, System.currentTimeMillis())
+            "unban" -> pendingPlayerActions.getOrPut(profileId) { mutableListOf() } +=
+                PendingPlayerAction(PendingPlayerActionKind.UNBAN, player, System.currentTimeMillis())
+            "privs" -> {
+                pendingPlayerActions.getOrPut(profileId) { mutableListOf() } +=
+                    PendingPlayerAction(PendingPlayerActionKind.PRIVILEGES, player, System.currentTimeMillis())
+                schedulePrivilegeVerification(profileId, player, requestedPrivileges = emptySet(), enabled = null)
             }
-            "revoke" -> if (parts.drop(2).joinToString(" ").isNotBlank()) {
-                PendingPlayerActionKind.PRIVILEGES
-            } else {
-                null
+            "grant", "revoke" -> {
+                val privileges = parts.drop(2)
+                    .flatMap { it.split(',') }
+                    .map { it.cleanPrivilegeName() }
+                    .filterTo(linkedSetOf()) { it.isNotBlank() }
+                if (privileges.isEmpty()) return
+                val enabled = action == "grant"
+                scope.launch {
+                    val snapshot = runCatching {
+                        repository.applyOptimisticPrivilegeChange(profileId, player, privileges, enabled)
+                    }.onFailure { error ->
+                        mainHandler.post {
+                            appendLog(profileId, "Could not apply optimistic UI privilege change for $player: ${error.message}")
+                        }
+                    }.getOrNull()
+                    mainHandler.post {
+                        val key = privilegeVerificationKey(profileId, player)
+                        if (snapshot != null) {
+                            optimisticPrivilegeBaselines.putIfAbsent(key, snapshot.before)
+                        }
+                        pendingPlayerActions.getOrPut(profileId) { mutableListOf() } +=
+                            PendingPlayerAction(PendingPlayerActionKind.PRIVILEGES, player, System.currentTimeMillis())
+                        schedulePrivilegeVerification(profileId, player, requestedPrivileges = privileges, enabled = enabled)
+                    }
+                }
             }
-            "privs" -> if (parts.size >= 2) {
-                PendingPlayerActionKind.PRIVILEGES
-            } else {
-                null
-            }
-            else -> null
-        } ?: return
-        pendingPlayerActions.getOrPut(profileId) { mutableListOf() } += PendingPlayerAction(kind, player, System.currentTimeMillis())
+        }
     }
 
     private fun applyConfirmedCommandResult(profileId: String, line: String) {
-        val message = line.substringAfter("Console:", missingDelimiterValue = "").trim()
+        val message = consolePayload(line)
         if (message.isBlank()) return
         val pending = pendingPlayerActions[profileId] ?: return
         val now = System.currentTimeMillis()
@@ -585,6 +605,7 @@ class OrchestratorService : Service() {
                     "not online" in lower
                 )
             if (failureForPlayer) {
+                rollbackOptimisticPrivilegeChange(profileId, player, "Luanti rejected the command for $player. UI reverted to the last known privileges.")
                 iterator.remove()
                 continue
             }
@@ -593,6 +614,7 @@ class OrchestratorService : Service() {
                     val privileges = parsePrivilegesMessage(message, player)
                     if (privileges != null) {
                         scope.launch { repository.markPlayerPrivileges(profileId, player, privileges) }
+                        optimisticPrivilegeBaselines.remove(privilegeVerificationKey(profileId, player))
                         iterator.remove()
                     }
                 }
@@ -607,6 +629,121 @@ class OrchestratorService : Service() {
             }
         }
         if (pending.isEmpty()) pendingPlayerActions.remove(profileId)
+    }
+
+    private fun schedulePrivilegeVerification(
+        profileId: String,
+        player: String,
+        requestedPrivileges: Set<String>,
+        enabled: Boolean?,
+    ) {
+        val key = privilegeVerificationKey(profileId, player)
+        privilegeVerificationJobs.remove(key)?.cancel()
+        privilegeVerificationJobs[key] = scope.launch {
+            var lastRead: Set<String>? = null
+            var mismatchReads = 0
+            repeat(8) { attempt ->
+                delay(if (attempt == 0) 180L else 250L)
+                val actual = runCatching { repository.readAuthPrivileges(profileId, player) }.getOrNull()
+                if (actual != null) {
+                    lastRead = actual
+                    if (enabled == null || privilegeRequestSatisfied(actual, requestedPrivileges, enabled)) {
+                        repository.markPlayerPrivileges(profileId, player, actual)
+                        mainHandler.post {
+                            finishPrivilegeVerification(profileId, player, null)
+                        }
+                        return@launch
+                    }
+                    mismatchReads += 1
+                    if (mismatchReads >= 2) {
+                        repository.markPlayerPrivileges(profileId, player, actual)
+                        mainHandler.post {
+                            finishPrivilegeVerification(
+                                profileId,
+                                player,
+                                "Privilege command did not stick for $player. LuaNet restored the UI from Luanti auth.sqlite.",
+                            )
+                        }
+                        return@launch
+                    }
+                }
+            }
+            lastRead?.let { actual ->
+                repository.markPlayerPrivileges(profileId, player, actual)
+                mainHandler.post {
+                    finishPrivilegeVerification(
+                        profileId,
+                        player,
+                        "Privilege command did not stick for $player. LuaNet restored the UI from Luanti auth.sqlite.",
+                    )
+                }
+                return@launch
+            }
+            mainHandler.post {
+                val rollback = optimisticPrivilegeBaselines[privilegeVerificationKey(profileId, player)]
+                if (rollback != null) {
+                    scope.launch { repository.markPlayerPrivileges(profileId, player, rollback) }
+                }
+                finishPrivilegeVerification(
+                    profileId,
+                    player,
+                    "Could not verify privileges for $player from auth.sqlite. UI reverted to the last known privileges.",
+                )
+            }
+        }
+    }
+
+    private fun finishPrivilegeVerification(profileId: String, player: String, message: String?) {
+        val key = privilegeVerificationKey(profileId, player)
+        privilegeVerificationJobs.remove(key)
+        optimisticPrivilegeBaselines.remove(key)
+        pendingPlayerActions[profileId]?.removeAll {
+            it.kind == PendingPlayerActionKind.PRIVILEGES && it.player.equals(player, ignoreCase = true)
+        }
+        if (pendingPlayerActions[profileId]?.isEmpty() == true) pendingPlayerActions.remove(profileId)
+        if (message != null) appendLog(profileId, message)
+    }
+
+    private fun rollbackOptimisticPrivilegeChange(profileId: String, player: String, message: String) {
+        val key = privilegeVerificationKey(profileId, player)
+        privilegeVerificationJobs.remove(key)?.cancel()
+        optimisticPrivilegeBaselines.remove(key)?.let { previous ->
+            scope.launch { repository.markPlayerPrivileges(profileId, player, previous) }
+        }
+        appendLog(profileId, message)
+    }
+
+    private fun clearPrivilegeVerification(profileId: String) {
+        val prefix = "$profileId:"
+        privilegeVerificationJobs.keys.filter { it.startsWith(prefix) }.toList().forEach { key ->
+            privilegeVerificationJobs.remove(key)?.cancel()
+        }
+        optimisticPrivilegeBaselines.keys.filter { it.startsWith(prefix) }.toList().forEach { key ->
+            optimisticPrivilegeBaselines.remove(key)
+        }
+    }
+
+    private fun privilegeRequestSatisfied(actual: Set<String>, requestedPrivileges: Set<String>, enabled: Boolean): Boolean {
+        val requested = requestedPrivileges.map { it.cleanPrivilegeName() }.filterTo(linkedSetOf()) { it.isNotBlank() }
+        if (requested.isEmpty()) return true
+        if ("all" in requested) {
+            return if (enabled) {
+                actual.any { it in setOf("privs", "basic_privs", "server") }
+            } else {
+                actual.isEmpty()
+            }
+        }
+        return if (enabled) requested.all { it in actual } else requested.none { it in actual }
+    }
+
+    private fun privilegeVerificationKey(profileId: String, player: String): String = "$profileId:${player.lowercase()}"
+
+    private fun consolePayload(line: String): String {
+        val afterConsole = line.substringAfter("Console:", missingDelimiterValue = "").trim()
+        if (afterConsole.isNotBlank()) return afterConsole
+        val markers = listOf("Privileges of ", " does not have any privileges.", "Banned ", "Unbanned ")
+        val index = markers.map { line.indexOf(it) }.filter { it >= 0 }.minOrNull()
+        return if (index != null) line.substring(index).trim() else line.trim()
     }
 
     private fun parsePrivilegesMessage(message: String, player: String): Set<String>? {
@@ -927,3 +1064,6 @@ private fun String.playerNameBefore(marker: String): String? {
 
 private fun String.cleanPlayerName(): String =
     trim().filter { it.isLetterOrDigit() || it == '_' || it == '-' }.take(32)
+
+private fun String.cleanPrivilegeName(): String =
+    trim().filter { it.isLetterOrDigit() || it == '_' }.take(32)

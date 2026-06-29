@@ -69,6 +69,11 @@ data class ServerModSetting(
     val description: String,
 )
 
+data class PrivilegeChangeSnapshot(
+    val before: Set<String>,
+    val optimistic: Set<String>,
+)
+
 class ServerRepository(
     private val context: Context,
     private val dao: LuaNetDao,
@@ -254,6 +259,46 @@ class ServerRepository(
         val serialized = clean.joinToString(",")
         if (dao.updatePlayerPrivileges(profileId, name, admin, serialized) == 0) {
             upsertLocalPlayer(profileId, name, online = false, admin = admin, privileges = serialized)
+        }
+    }
+
+    suspend fun applyOptimisticPrivilegeChange(
+        profileId: String,
+        rawName: String,
+        rawPrivileges: Collection<String>,
+        enabled: Boolean,
+    ): PrivilegeChangeSnapshot = withContext(Dispatchers.IO) {
+        val name = rawName.safePlayerName()
+        require(name.isNotBlank()) { "Invalid player name" }
+        val privileges = rawPrivileges.map { it.safePrivilegeName() }.filterTo(linkedSetOf()) { it.isNotBlank() }
+        require(privileges.isNotEmpty()) { "Invalid privilege" }
+        val existing = dao.player(profileId, name)
+        val before = existing?.privileges
+            ?.privilegeSet()
+            ?.ifEmpty { if (existing.admin) DEFAULT_ADMIN_PRIVILEGES else emptySet() }
+            .orEmpty()
+            .cleanPrivilegeSet()
+        val optimistic = when {
+            "all" in privileges && enabled -> DEFAULT_ADMIN_PRIVILEGES.cleanPrivilegeSet()
+            "all" in privileges && !enabled -> emptySet()
+            enabled -> (before + privileges).cleanPrivilegeSet()
+            else -> (before - privileges).cleanPrivilegeSet()
+        }
+        markPlayerPrivileges(profileId, name, optimistic)
+        PrivilegeChangeSnapshot(before = before, optimistic = optimistic)
+    }
+
+    suspend fun readAuthPrivileges(profileId: String, rawName: String): Set<String>? = withContext(Dispatchers.IO) {
+        val name = rawName.safePlayerName()
+        if (name.isBlank()) return@withContext null
+        val authFile = File(profileDirectory(profileId), "world/auth.sqlite")
+        if (!authFile.isFile) return@withContext null
+        val database = SQLiteDatabase.openDatabase(authFile.absolutePath, null, SQLiteDatabase.OPEN_READONLY)
+        try {
+            val playerId = authId(database, name) ?: return@withContext null
+            privilegesFor(database, playerId).cleanPrivilegeSet()
+        } finally {
+            database.close()
         }
     }
 

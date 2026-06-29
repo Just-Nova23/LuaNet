@@ -880,9 +880,9 @@ private fun PlayerMenuScreen(
             message.contains("stop the server", ignoreCase = true) ||
             message.contains("offline", ignoreCase = true)
     } == true
-    fun sendRunningCommand(command: String) {
+    fun sendRunningCommand(command: String, message: String = "Command sent. LuaNet will update this screen when Luanti confirms the result.") {
         onCommand(command)
-        actionMessage = "Command sent. This screen updates only after Luanti confirms the new state."
+        actionMessage = message
     }
     fun offlineOnlyError() {
         actionMessage = "Stop the server before changing privileges for an offline player. LuaNet will not fake a server action."
@@ -893,7 +893,10 @@ private fun PlayerMenuScreen(
     }
     fun changePrivilege(privilege: String, enabled: Boolean) {
         if (running && isOnline) {
-            sendRunningCommand("/${if (enabled) "grant" else "revoke"} $safe $privilege")
+            sendRunningCommand(
+                "/${if (enabled) "grant" else "revoke"} $safe $privilege",
+                "Privilege toggle updated. LuaNet verifies auth.sqlite and reverts if Luanti did not apply it.",
+            )
         } else if (running) {
             offlineOnlyError()
         } else {
@@ -971,11 +974,17 @@ private fun PlayerMenuScreen(
                         Text("Use this for full server admin. For precise control, use the privilege toggles below.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             PlayerActionButton("Grant admin preset", safe.isNotBlank() && !player.admin) {
-                                if (running && isOnline) sendRunningCommand("/grant $safe all")
-                                else if (running) offlineOnlyError()
+                                if (running && isOnline) {
+                                    sendRunningCommand(
+                                        "/grant $safe all",
+                                        "Admin preset applied locally. LuaNet verifies auth.sqlite and reverts if Luanti did not apply it.",
+                                    )
+                                } else if (running) offlineOnlyError()
                                 else runOfflineAction { onSetAdminOffline(profileId, safe, true, it) }
                             }
-                            PlayerActionButton("Refresh from server", running && safe.isNotBlank()) { sendRunningCommand("/privs $safe") }
+                            PlayerActionButton("Refresh from server", running && safe.isNotBlank()) {
+                                sendRunningCommand("/privs $safe", "Refreshing privileges from Luanti auth data...")
+                            }
                         }
                     }
                 }
