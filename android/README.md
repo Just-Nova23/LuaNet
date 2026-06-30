@@ -71,7 +71,9 @@ Release builds should provide:
 - `LUANET_GOOGLE_WEB_CLIENT_ID` for Credential Manager Google sign-in, or a web OAuth client
   in `google-services.json`;
 - `LUANET_ADMOB_APP_ID`;
-- `LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID`.
+- `LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID`;
+- `LUANET_UPLOAD_KEYSTORE`, `LUANET_UPLOAD_KEYSTORE_PASSWORD`, `LUANET_UPLOAD_KEY_ALIAS`,
+  and `LUANET_UPLOAD_KEY_PASSWORD` for the Google Play upload key.
 
 Debug APKs default to the NovaX production control plane so they work on real phones.
 Use `LUANET_DEBUG_CONTROL_PLANE_URL=http://10.0.2.2:8080` only when testing against a
@@ -82,5 +84,10 @@ testing both use Firebase ID tokens.
 
 AdMob app IDs use `~`; interstitial ad unit IDs use `/`. A release build fails if
 `LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID` is accidentally set to an app ID.
+
+Create Play subscription products with these exact IDs:
+
+- `luanet_premium_monthly` for the monthly plan.
+- `luanet_premium_yearly` for the yearly plan.
 
 Do not commit `google-services.json`, signing keys, Firebase service accounts, or AdMob IDs.

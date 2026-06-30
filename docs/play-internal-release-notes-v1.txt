@@ -1,0 +1,8 @@
+Initial LuaNet internal testing build.
+
+- Local Luanti server hosting on Android.
+- Multiple engine versions bundled in the app.
+- ContentDB browsing and downloads.
+- Firebase account login.
+- NovaX public access integration.
+- Ad-supported Free public access flow and Premium purchase flow.

@@ -25,6 +25,18 @@ val luanetDebugKeyAlias = providers.gradleProperty("LUANET_DEBUG_KEY_ALIAS")
 val luanetDebugKeyPassword = providers.gradleProperty("LUANET_DEBUG_KEY_PASSWORD")
     .orElse(providers.environmentVariable("LUANET_DEBUG_KEY_PASSWORD"))
     .orElse(luanetDebugStorePassword)
+val luanetUploadKeystorePath = providers.gradleProperty("LUANET_UPLOAD_KEYSTORE")
+    .orElse(providers.environmentVariable("LUANET_UPLOAD_KEYSTORE"))
+val luanetUploadKeystore = luanetUploadKeystorePath.orNull?.let { rootProject.file(it) }
+val luanetUploadStorePassword = providers.gradleProperty("LUANET_UPLOAD_KEYSTORE_PASSWORD")
+    .orElse(providers.environmentVariable("LUANET_UPLOAD_KEYSTORE_PASSWORD"))
+val luanetUploadKeyAlias = providers.gradleProperty("LUANET_UPLOAD_KEY_ALIAS")
+    .orElse(providers.environmentVariable("LUANET_UPLOAD_KEY_ALIAS"))
+    .orElse("luanet-upload")
+val luanetUploadKeyPassword = providers.gradleProperty("LUANET_UPLOAD_KEY_PASSWORD")
+    .orElse(providers.environmentVariable("LUANET_UPLOAD_KEY_PASSWORD"))
+    .orElse(luanetUploadStorePassword)
+val injectedSigningStoreFile = providers.gradleProperty("android.injected.signing.store.file")
 fun webClientIdFromGoogleServices(): String {
     val file = project.file("google-services.json")
     if (!file.isFile) return ""
@@ -81,6 +93,14 @@ android {
                 keyPassword = luanetDebugKeyPassword.get()
             }
         }
+        if (luanetUploadKeystore?.isFile == true) {
+            create("luanetUpload") {
+                storeFile = luanetUploadKeystore
+                storePassword = luanetUploadStorePassword.get()
+                keyAlias = luanetUploadKeyAlias.get()
+                keyPassword = luanetUploadKeyPassword.get()
+            }
+        }
     }
 
     buildTypes {
@@ -94,6 +114,9 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (luanetUploadKeystore?.isFile == true) {
+                signingConfig = signingConfigs.getByName("luanetUpload")
+            }
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -175,9 +198,27 @@ tasks.register("checkReleaseServiceConfig") {
     }
 }
 
+tasks.register("checkReleaseSigningConfig") {
+    doLast {
+        val hasUploadSigning = luanetUploadKeystore?.isFile == true &&
+            luanetUploadStorePassword.orNull?.isNotBlank() == true &&
+            luanetUploadKeyAlias.get().isNotBlank() &&
+            luanetUploadKeyPassword.orNull?.isNotBlank() == true
+        val hasInjectedSigning = injectedSigningStoreFile.orNull?.isNotBlank() == true
+        if (!hasUploadSigning && !hasInjectedSigning) {
+            throw GradleException(
+                "Release signing is required. Provide LUANET_UPLOAD_KEYSTORE, " +
+                    "LUANET_UPLOAD_KEYSTORE_PASSWORD, LUANET_UPLOAD_KEY_ALIAS, and " +
+                    "LUANET_UPLOAD_KEY_PASSWORD, or use Android Gradle injected signing properties.",
+            )
+        }
+    }
+}
+
 tasks.matching { it.name == "preReleaseBuild" }.configureEach {
     dependsOn("checkReleaseNativeArtifacts")
     dependsOn("checkReleaseServiceConfig")
+    dependsOn("checkReleaseSigningConfig")
 }
 
 dependencies {
