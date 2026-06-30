@@ -8,7 +8,7 @@ range; PostgreSQL is reachable only on the private Compose network.
 
 - HPE host address: `192.168.100.11`.
 - Router forwards TCP `7443` and UDP `30000-30127` to the HPE host.
-- `api.luanet.novaxhosting.com` is proxied by Cloudflare to the HTTPS reverse proxy.
+- `luanet-api.novaxhosting.com` is proxied by Cloudflare to the HTTPS reverse proxy.
 - `tunnel.luanet.novaxhosting.com` and `play.luanet.novaxhosting.com` are DNS-only A/AAAA records.
 - A publicly trusted certificate for `tunnel.luanet.novaxhosting.com` is installed as
   `secrets/frps-fullchain.pem` and `secrets/frps-private-key.pem`.

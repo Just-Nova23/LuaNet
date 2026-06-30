@@ -1,4 +1,4 @@
-api.luanet.novaxhosting.com {
+luanet-api.novaxhosting.com {
     encode zstd gzip
     @internal path /internal/*
     respond @internal 404

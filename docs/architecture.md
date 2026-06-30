@@ -13,7 +13,7 @@ Luanti client --UDP--> NovaX FRPS --TLS/FRP--> Android frpc --UDP--> Luanti engi
                      Go control-plane + PostgreSQL
 ```
 
-`api.luanet.novaxhosting.com` is HTTP behind Cloudflare.
+`luanet-api.novaxhosting.com` is HTTP behind Cloudflare.
 `tunnel.luanet.novaxhosting.com:7443` and
 `play.luanet.novaxhosting.com:30000-30127/udp` are DNS-only.
 

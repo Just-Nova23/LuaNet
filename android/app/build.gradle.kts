@@ -44,7 +44,7 @@ val googleWebClientId = providers.gradleProperty("LUANET_GOOGLE_WEB_CLIENT_ID")
     .orElse(webClientIdFromGoogleServices())
 val debugControlPlaneUrl = providers.gradleProperty("LUANET_DEBUG_CONTROL_PLANE_URL")
     .orElse(providers.environmentVariable("LUANET_DEBUG_CONTROL_PLANE_URL"))
-    .orElse("https://api.luanet.novaxhosting.com")
+    .orElse("https://luanet-api.novaxhosting.com")
 val admobAppId = providers.gradleProperty("LUANET_ADMOB_APP_ID")
     .orElse(providers.environmentVariable("LUANET_ADMOB_APP_ID"))
     .orElse("ca-app-pub-1122211074280550~5618156743")
@@ -66,7 +66,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
         ndk.abiFilters += "arm64-v8a"
-        buildConfigField("String", "CONTROL_PLANE_URL", "\"https://api.luanet.novaxhosting.com\"")
+        buildConfigField("String", "CONTROL_PLANE_URL", "\"https://luanet-api.novaxhosting.com\"")
         buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"${googleWebClientId.get()}\"")
         buildConfigField("String", "ADMOB_PUBLIC_INTERSTITIAL_ID", "\"${admobInterstitialId.get()}\"")
         resValue("string", "admob_app_id", admobAppId.get())
