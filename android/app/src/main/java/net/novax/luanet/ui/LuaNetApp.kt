@@ -18,6 +18,11 @@ import android.widget.TextView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -144,6 +149,7 @@ import net.novax.luanet.domain.ServerState
 import net.novax.luanet.runtime.OrchestratorService
 import net.novax.luanet.runtime.RuntimeRegistry
 import net.novax.luanet.runtime.RuntimeSnapshot
+import kotlinx.coroutines.delay
 
 private sealed interface Destination {
     data object Servers : Destination
@@ -167,11 +173,14 @@ private typealias ServerSettingsSaver = (
 
 @Composable
 fun LuaNetApp(viewModel: MainViewModel) {
+    val context = LocalContext.current
     val profilesLoaded by viewModel.profilesLoaded.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val content by viewModel.content.collectAsStateWithLifecycle()
     val contentDetails by viewModel.contentDetails.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
+    val onboardingPrefs = remember(context) { context.getSharedPreferences("luanet_ui", Context.MODE_PRIVATE) }
+    var onboardingSkipped by remember { mutableStateOf(onboardingPrefs.getBoolean("onboarding_skipped", false)) }
     var destination: Destination by remember { mutableStateOf(Destination.Servers) }
     var backStack: List<Destination> by remember { mutableStateOf(emptyList()) }
     fun navigate(next: Destination) {
@@ -196,6 +205,16 @@ fun LuaNetApp(viewModel: MainViewModel) {
     BackHandler(destination != Destination.Servers) { goBack() }
     if (!profilesLoaded) {
         StartupLoadingScreen()
+        return
+    }
+    if (destination == Destination.Servers && profiles.isEmpty() && !onboardingSkipped) {
+        OnboardingScreen(
+            onCreate = { navigate(Destination.Create) },
+            onSkip = {
+                onboardingPrefs.edit().putBoolean("onboarding_skipped", true).apply()
+                onboardingSkipped = true
+            },
+        )
         return
     }
     when (val current = destination) {
@@ -389,6 +408,39 @@ private fun StartupLoadingScreen() {
     }
 }
 
+@Composable
+private fun OnboardingScreen(
+    onCreate: () -> Unit,
+    onSkip: () -> Unit,
+) {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(
+            Modifier.fillMaxSize().padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(
+                painterResource(R.drawable.ic_luanet),
+                contentDescription = "LuaNet",
+                modifier = Modifier.size(116.dp),
+                tint = Color.Unspecified,
+            )
+            Spacer(Modifier.height(28.dp))
+            Text("Your world.\nYour server.", style = MaterialTheme.typography.displaySmall)
+            Spacer(Modifier.height(18.dp))
+            Button(onClick = onCreate, modifier = Modifier.fillMaxWidth().height(56.dp)) {
+                Text("Create server")
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null)
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onSkip, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text("Skip")
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ServerList(
@@ -401,12 +453,17 @@ private fun ServerList(
     onOpenCredits: () -> Unit,
 ) {
     val activeCount = profiles.count { it.state in setOf(ServerState.STARTING, ServerState.RUNNING) }
+    val fabPulse = rememberInfiniteTransition(label = "create-server-fab")
+    val fabScale by fabPulse.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.06f,
+        animationSpec = infiniteRepeatable(animation = tween(900), repeatMode = RepeatMode.Reverse),
+        label = "create-server-fab-scale",
+    )
     Scaffold(
         topBar = { TopAppBar(title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.primaryContainer) {
-                    Icon(painterResource(R.drawable.ic_luanet), null, Modifier.padding(7.dp).size(28.dp), tint = Color.Unspecified)
-                }
+                Icon(painterResource(R.drawable.ic_luanet), null, Modifier.size(36.dp), tint = Color.Unspecified)
                 Spacer(Modifier.width(12.dp))
                 Column {
                     Text("LuaNet", style = MaterialTheme.typography.titleLarge)
@@ -414,8 +471,10 @@ private fun ServerList(
                 }
             }
         }, actions = {
-            IconButton(onClick = onOpenPremium) {
-                Icon(Icons.Default.Paid, "Premium")
+            if (account.signedIn) {
+                IconButton(onClick = onOpenPremium) {
+                    Icon(Icons.Default.Paid, "Premium")
+                }
             }
             IconButton(onClick = onOpenCredits) {
                 Icon(Icons.Default.Info, "Credits")
@@ -425,7 +484,12 @@ private fun ServerList(
             }
         }) },
         floatingActionButton = {
-            if (profiles.isNotEmpty()) FloatingActionButton(onClick = onCreate) { Icon(Icons.Default.Add, "New server") }
+            if (profiles.isNotEmpty()) {
+                FloatingActionButton(
+                    onClick = onCreate,
+                    modifier = Modifier.graphicsLayer(scaleX = fabScale, scaleY = fabScale),
+                ) { Icon(Icons.Default.Add, "New server") }
+            }
         },
     ) { padding ->
         if (profiles.isEmpty()) {
@@ -446,18 +510,15 @@ private fun ServerList(
                         leadingIcon = { Icon(Icons.Default.CheckCircle, null, Modifier.size(18.dp)) })
                     Spacer(Modifier.height(12.dp))
                     Text("Your world.\nYour server.", style = MaterialTheme.typography.displaySmall)
-                    Spacer(Modifier.height(10.dp))
-                    Text("Host Luanti over LAN for free, then add a NovaX public address only when you need it.",
-                        style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 item {
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            FeatureLine(Icons.Default.Memory, "17 engine versions", "From 5.0.1 through 5.16.1")
+                            FeatureLine(Icons.Default.Memory, "Luanti engines", "Latest included, older versions on demand")
                             HorizontalDivider()
-                            FeatureLine(Icons.Default.Lan, "LAN without an account", "No ads and no mandatory idle stop")
+                            FeatureLine(Icons.Default.Lan, "LAN hosting", "No account needed")
                             HorizontalDivider()
-                            FeatureLine(Icons.Default.Cloud, "Optional public tunnel", "A stable NovaX host and assigned UDP port")
+                            FeatureLine(Icons.Default.Cloud, "External link", "Optional public address")
                         }
                     }
                 }
@@ -536,12 +597,7 @@ private fun AccountScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text("Account")
-                        Text("NovaX sign-in and privacy", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
+                title = { Text("Account") },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
@@ -552,18 +608,11 @@ private fun AccountScreen(
             Modifier.fillMaxSize().padding(padding).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item {
-                AccountHeroCard(account)
-            }
             if (!signedIn) {
                 item {
                     Card {
                         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Text("Sign in to NovaX", style = MaterialTheme.typography.titleLarge)
-                            Text(
-                                "Required only for public tunnels and Premium. Local LAN hosting stays free and accountless.",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+                            Text("Sign in", style = MaterialTheme.typography.titleLarge)
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 OAuthButton(
                                     text = "Google",
@@ -647,16 +696,21 @@ private fun AccountScreen(
                     }
                 }
             } else {
+                item { AccountHeroCard(account) }
                 item {
                     Card {
                         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Account actions", style = MaterialTheme.typography.titleLarge)
+                            Text("Account menu", style = MaterialTheme.typography.titleLarge)
+                            FilledTonalButton(
+                                onClick = onOpenPremium,
+                                modifier = Modifier.fillMaxWidth().height(52.dp),
+                            ) {
+                                Icon(Icons.Default.Paid, null)
+                                Spacer(Modifier.width(8.dp))
+                                Text("Subscription")
+                            }
                             if (!account.emailVerified) {
-                                Text(
-                                    "Email verification is required before public tunnels. OAuth providers such as Google/GitHub are accepted by NovaX after Firebase verifies the provider.",
-                                    color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
+                                Text("Email verification required", color = MaterialTheme.colorScheme.error)
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 FilledTonalButton(
@@ -679,7 +733,7 @@ private fun AccountScreen(
                             TextButton(
                                 onClick = { confirmDelete = true },
                                 modifier = Modifier.fillMaxWidth(),
-                            ) { Text("Delete NovaX account") }
+                            ) { Text("Delete account") }
                         }
                     }
                 }
@@ -698,7 +752,7 @@ private fun AccountScreen(
         AlertDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text("Delete account?") },
-            text = { Text("This revokes public tunnels, removes NovaX entitlement data and deletes the Firebase Auth user on the control plane.") },
+            text = { Text("This removes account data and closes active external links.") },
             confirmButton = {
                 Button(onClick = {
                     confirmDelete = false
@@ -743,15 +797,26 @@ private fun PremiumScreen(
         }
     }
 
+    if (!signedIn) {
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("Premium") },
+                    navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+                )
+            },
+        ) { padding ->
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                EmptySection(Icons.Default.Paid, "Sign in first", "")
+            }
+        }
+        return
+    }
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text("Premium")
-                        Text("Public hosting without ads or time limits", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
+                title = { Text("Premium") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             )
         },
@@ -768,13 +833,13 @@ private fun PremiumScreen(
                                 Icon(Icons.Default.Paid, null, Modifier.padding(10.dp).size(28.dp), tint = MaterialTheme.colorScheme.primary)
                             }
                             Spacer(Modifier.width(12.dp))
-                            Column(Modifier.weight(1f)) {
-                                Text("LuaNet Premium", style = MaterialTheme.typography.headlineSmall)
-                                Text(
-                                    if (account.tier.name == "PREMIUM") "Active on this NovaX account" else "Upgrade when public hosting needs to stay online",
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                )
-                            }
+	                            Column(Modifier.weight(1f)) {
+	                                Text("LuaNet Premium", style = MaterialTheme.typography.headlineSmall)
+	                                Text(
+	                                    if (account.tier.name == "PREMIUM") "Active on this account" else "Upgrade when public hosting needs to stay online",
+	                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+	                                )
+	                            }
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             AccountStatusPill("Current tier", account.tier.name.lowercase().replaceFirstChar(Char::uppercase), Modifier.weight(1f))
@@ -808,13 +873,13 @@ private fun PremiumScreen(
             }
             item {
                 Card {
-                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text("Included", style = MaterialTheme.typography.titleLarge)
-                        FeatureLine(Icons.Default.Cloud, "Five active public tunnels", "Limit is shared by the NovaX account across devices")
-                        HorizontalDivider()
-                        FeatureLine(Icons.Default.CheckCircle, "No public-start interstitial", "Ads remain only on Free public starts")
-                        HorizontalDivider()
-                        FeatureLine(Icons.Default.Public, "No four-hour lease limit", "Premium leases renew while entitlement is valid")
+	                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+	                        Text("Included", style = MaterialTheme.typography.titleLarge)
+	                        FeatureLine(Icons.Default.Cloud, "Five active external links", "Shared across devices")
+	                        HorizontalDivider()
+	                        FeatureLine(Icons.Default.CheckCircle, "No start ad", "Ads stay on Free external links")
+	                        HorizontalDivider()
+                        FeatureLine(Icons.Default.Public, "No four-hour limit", "Links renew while Premium is active")
                     }
                 }
             }
@@ -832,16 +897,8 @@ private fun PremiumScreen(
                     ) { Text("Sync") }
                 }
             }
-            if (!signedIn) {
-                item {
-                    Text(
-                        "Open Account and sign in with Google, GitHub or email before buying or restoring Premium.",
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            }
-            message?.let {
-                item {
+	            message?.let {
+	                item {
                     Text(
                         it,
                         color = if (messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
@@ -882,12 +939,7 @@ private fun CreditsScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text("Credits")
-                        Text("Project links and legal contact", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                },
+                title = { Text("Credits") },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
             )
         },
@@ -897,29 +949,39 @@ private fun CreditsScreen(onBack: () -> Unit) {
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
             item {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("LuaNet", style = MaterialTheme.typography.headlineMedium)
-                        Text(
-                            "Android hosting for Luanti, with optional NovaX public UDP tunnel. App code is Apache-2.0; Luanti engine fork/bridge notices stay under their upstream licenses.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                Text("Made with", style = MaterialTheme.typography.headlineMedium)
             }
             item {
                 CreditLinkCard(
                     icon = Icons.Default.Language,
-                    title = "Website",
-                    detail = "luanet.novaxhosting.com",
-                    url = "https://luanet.novaxhosting.com",
+                    title = "Luanti",
+                    detail = "luanti.org",
+                    url = "https://www.luanti.org",
                     context = context,
                 )
             }
             item {
                 CreditLinkCard(
                     icon = Icons.Default.Code,
-                    title = "App source",
+                    title = "ContentDB",
+                    detail = "content.luanti.org",
+                    url = "https://content.luanti.org",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Cloud,
+                    title = "FRP",
+                    detail = "github.com/fatedier/frp",
+                    url = "https://github.com/fatedier/frp",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Code,
+                    title = "LuaNet source",
                     detail = "github.com/Just-Nova23/LuaNet",
                     url = "https://github.com/Just-Nova23/LuaNet",
                     context = context,
@@ -927,63 +989,29 @@ private fun CreditsScreen(onBack: () -> Unit) {
             }
             item {
                 CreditLinkCard(
-                    icon = Icons.Default.Info,
-                    title = "Privacy policy",
-                    detail = "luanet.novaxhosting.com/privacy",
-                    url = "https://luanet.novaxhosting.com/privacy",
-                    context = context,
-                )
-            }
-            item {
-                CreditLinkCard(
-                    icon = Icons.Default.Info,
-                    title = "Terms",
-                    detail = "luanet.novaxhosting.com/terms",
-                    url = "https://luanet.novaxhosting.com/terms",
-                    context = context,
-                )
-            }
-            item {
-                CreditLinkCard(
-                    icon = Icons.Default.AccountCircle,
-                    title = "Account deletion",
-                    detail = "luanet.novaxhosting.com/delete-account",
-                    url = "https://luanet.novaxhosting.com/delete-account",
-                    context = context,
-                )
-            }
-            item {
-                CreditLinkCard(
-                    icon = Icons.Default.Code,
-                    title = "Licenses",
-                    detail = "luanet.novaxhosting.com/licenses",
-                    url = "https://luanet.novaxhosting.com/licenses",
-                    context = context,
-                )
-            }
-            item {
-                CreditLinkCard(
                     icon = Icons.Default.Language,
-                    title = "NovaX status",
-                    detail = "status.novaxhosting.com",
-                    url = "https://status.novaxhosting.com",
+                    title = "LuaNet website",
+                    detail = "luanet.novaxhosting.com",
+                    url = "https://luanet.novaxhosting.com",
                     context = context,
                 )
             }
             item {
                 CreditLinkCard(
                     icon = Icons.Default.Forum,
-                    title = "Contact",
+                    title = "Support",
                     detail = "luanet@novaxhosting.com",
                     url = "mailto:luanet@novaxhosting.com",
                     context = context,
                 )
             }
             item {
-                Text(
-                    "LuaNet does not upload worlds, chat or player names to NovaX. The control plane stores only account, device, tunnel lease, billing entitlement and anti-abuse metadata.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                CreditLinkCard(
+                    icon = Icons.Default.Info,
+                    title = "Licenses",
+                    detail = "luanet.novaxhosting.com/licenses",
+                    url = "https://luanet.novaxhosting.com/licenses",
+                    context = context,
                 )
             }
         }
@@ -1041,17 +1069,13 @@ private fun AccountHeroCard(account: AccountState) {
                     AccountAvatar(account.photoUrl, Modifier.padding(10.dp).size(26.dp))
                 }
                 Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        if (account.signedIn) account.email ?: account.displayName ?: "Signed in" else "NovaX account",
-                        style = MaterialTheme.typography.titleLarge,
-                    )
-                    Text(
-                        if (account.signedIn) "Ready for public tunnels" else "Sign in to enable public hosting and Premium",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
+	                Column(Modifier.weight(1f)) {
+	                    Text(
+	                        account.email ?: account.displayName ?: "Signed in",
+	                        style = MaterialTheme.typography.titleLarge,
+	                    )
+	                }
+	            }
             HorizontalDivider()
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 AccountStatusPill(
@@ -1059,24 +1083,19 @@ private fun AccountHeroCard(account: AccountState) {
                     value = account.tier.name.lowercase().replaceFirstChar(Char::uppercase),
                     modifier = Modifier.weight(1f),
                 )
-                AccountStatusPill(
-                    label = "Verification",
-                    value = if (!account.signedIn) "Required" else if (account.emailVerified) "Verified" else "Pending",
-                    modifier = Modifier.weight(1f),
-                    error = account.signedIn && !account.emailVerified,
-                )
-            }
-            account.expiresAt?.let {
-                Text("Premium expires: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Text(
-                "LAN hosting works without an account. NovaX account data is used only for public tunnels, billing and anti-abuse limits.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
+	                AccountStatusPill(
+	                    label = "Verification",
+	                    value = if (account.emailVerified) "Verified" else "Pending",
+	                    modifier = Modifier.weight(1f),
+	                    error = !account.emailVerified,
+	                )
+	            }
+	            account.expiresAt?.let {
+	                Text("Premium expires: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+	            }
+	        }
+	    }
+	}
 
 @Composable
 private fun AccountStatusPill(
@@ -1207,7 +1226,7 @@ private fun CreateServer(
                     Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Default.Lan, null, tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.width(12.dp))
-                        Text("Starts unlisted and open on LAN. Public access is always opt-in.", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+	                        Text("Starts unlisted and open on LAN. External link is always opt-in.", Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -1361,10 +1380,11 @@ private fun Dashboard(
                     localPort = runtime?.localPort ?: profile.localPort?.takeUnless {
                         runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
                     },
-                    context = context,
-                    onEnsureEngineInstalled = onEnsureEngineInstalled,
-                    onStartPublicTunnel = onStartPublicTunnel,
-                    onStopPublicTunnel = onStopPublicTunnel,
+	                    context = context,
+	                    onOpenContentLibrary = onOpenContentLibrary,
+	                    onEnsureEngineInstalled = onEnsureEngineInstalled,
+	                    onStartPublicTunnel = onStartPublicTunnel,
+	                    onStopPublicTunnel = onStopPublicTunnel,
                 )
                 DashboardTabKey.CONSOLE -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
                     OrchestratorService.command(context, profile.id, command)
@@ -1384,7 +1404,7 @@ private fun Dashboard(
                     onOpenGameSettings = onOpenGameSettings,
                     onOpenModSettings = onOpenModSettings,
                 )
-                DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onOpenAdvancedSettings, onSaveServerSettings)
+	                DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onOpenAdvancedSettings, onOpenContentLibrary, onSaveServerSettings)
                 DashboardTabKey.BACKUPS -> BackupPanel(profile, backups, onCreateBackup, onRestoreBackup, onDeleteBackup)
             }
         }
@@ -1408,11 +1428,11 @@ private fun ConsolePanel(
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) {
                     Icon(Icons.AutoMirrored.Filled.Terminal, null, Modifier.padding(18.dp).size(30.dp), tint = MaterialTheme.colorScheme.primary)
                 }
-                Spacer(Modifier.height(16.dp))
-                Text("Console is quiet", style = MaterialTheme.typography.titleLarge)
-                Spacer(Modifier.height(6.dp))
-                Text("Start the server to see engine logs and run commands.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+	                Spacer(Modifier.height(16.dp))
+	                Text("Console is quiet", style = MaterialTheme.typography.titleLarge)
+	                Spacer(Modifier.height(6.dp))
+	                Text("start the server first :)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+	            }
         } else {
             LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(logs) { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -1453,19 +1473,15 @@ private fun PlayersPanel(
             }
         }
         byName.values.sortedWith(compareByDescending<ServerPlayerEntity> { it.online || it.name in runtimePlayers }.thenBy { it.name.lowercase() })
-    }
-    if (merged.isEmpty()) {
-        EmptySection(Icons.Default.Group, "No players yet", "Players will stay listed here after they join once, even when the server is stopped.")
-    } else {
+	    }
+	    if (merged.isEmpty()) {
+	        EmptySection(Icons.Default.Group, "No players yet", "")
+	    } else {
         LazyColumn(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            item {
-                Text("Players", style = MaterialTheme.typography.headlineSmall)
-                Text(
-                    "Tap a player to open moderation and privilege actions. Offline players stay listed after they join once.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.height(8.dp))
-            }
+	            item {
+	                Text("Players", style = MaterialTheme.typography.headlineSmall)
+	                Spacer(Modifier.height(8.dp))
+	            }
             items(merged) { player ->
                 val isOnline = player.online || player.name in runtimePlayers
                 Card(
@@ -1717,7 +1733,9 @@ private fun EmptySection(icon: ImageVector, title: String, detail: String) {
     Column(Modifier.fillMaxSize().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
         Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surfaceVariant) { Icon(icon, null, Modifier.padding(18.dp).size(30.dp), tint = MaterialTheme.colorScheme.primary) }
         Spacer(Modifier.height(16.dp)); Text(title, style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.height(6.dp)); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (detail.isNotBlank()) {
+            Spacer(Modifier.height(6.dp)); Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -1731,28 +1749,27 @@ private fun ContentSummaryPanel(
     onOpenZipImport: () -> Unit,
     onOpenGameSettings: () -> Unit,
     onOpenModSettings: () -> Unit,
-) {
-    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item {
-            Text("Content", style = MaterialTheme.typography.headlineMedium)
-            Text(
-                "Install a game first, then add mods and modpacks. The full ContentDB browser opens as its own screen.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        item { InstalledContentSummary(installedPackages) }
-        if (profile.gameKey == null) {
-            item {
-                Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.FolderZip, null, tint = MaterialTheme.colorScheme.tertiary)
-                        Spacer(Modifier.width(12.dp))
-                        Column {
-                            Text("A game is required before the server can start", fontWeight = FontWeight.SemiBold)
-                            Text("Open ContentDB to download a game, or use ZIP Import for a local archive.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
+	) {
+	    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+	        item {
+	            Text("Content", style = MaterialTheme.typography.headlineMedium)
+	        }
+	        item { InstalledContentSummary(installedPackages) }
+	        if (profile.gameKey == null) {
+	            item {
+	                Card(
+	                    onClick = onOpenContentLibrary,
+	                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary),
+	                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+	                ) {
+	                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+	                        Icon(Icons.Default.FolderZip, null, tint = MaterialTheme.colorScheme.tertiary)
+	                        Spacer(Modifier.width(12.dp))
+	                        Column {
+	                            Text("Game required", fontWeight = FontWeight.SemiBold)
+	                        }
+	                    }
+	                }
             }
         }
         item {
@@ -1760,12 +1777,12 @@ private fun ContentSummaryPanel(
                 onClick = onOpenContentLibrary,
                 enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
                 modifier = Modifier.fillMaxWidth().height(56.dp),
-            ) {
-                Icon(Icons.Default.FolderZip, null)
-                Spacer(Modifier.width(8.dp))
-                Text("Open ContentDB browser")
-            }
-        }
+	            ) {
+	                Icon(Icons.Default.FolderZip, null)
+	                Spacer(Modifier.width(8.dp))
+	                Text("ContentDB")
+	            }
+	        }
         item {
             FilledTonalButton(
                 onClick = onOpenZipImport,
@@ -1801,15 +1818,8 @@ private fun ContentSummaryPanel(
                 }
             }
         }
-        item {
-            Text(
-                "Stop the server before changing games, mods, modpacks, ZIP imports, or content-specific settings.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
+	    }
+	}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1887,17 +1897,12 @@ private fun ContentBrowserScreen(
     onInstall: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
 ) {
     if (profile == null) return
-    Scaffold(topBar = {
-        TopAppBar(
-            title = {
-                Column {
-                    Text("ContentDB")
-                    Text(profile.name, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-            },
-            navigationIcon = {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
-            },
+	    Scaffold(topBar = {
+	        TopAppBar(
+	            title = { Text("ContentDB") },
+	            navigationIcon = {
+	                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+	            },
         )
     }) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
@@ -1941,10 +1946,9 @@ private fun ContentPanel(
     LazyColumn(
         Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item { Text("Explore ContentDB", style = MaterialTheme.typography.headlineMedium) }
-        item { Text("Browse featured games and mods, search the full catalog, then tap a package for screenshots, details and install.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        item { InstalledContentSummary(installedPackages) }
+	    ) {
+	        item { Text("Explore ContentDB", style = MaterialTheme.typography.headlineMedium) }
+	        item { InstalledContentSummary(installedPackages) }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(query, { query = it.take(80) }, label = { Text("Search ContentDB") }, singleLine = true, modifier = Modifier.weight(1f))
@@ -1955,19 +1959,16 @@ private fun ContentPanel(
         if (state.loading) item { Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) { CircularProgressIndicator() } }
         state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }
 
-        if (!state.loading && state.profileId == profile.id && state.query.isBlank() && state.sections.isEmpty() && state.error == null) {
-            item { Text("Loading featured ContentDB sections. Use Search if you want a specific package.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
+	        if (!state.loading && state.profileId == profile.id && state.query.isBlank() && state.sections.isEmpty() && state.error == null) {
+	            item { Text("Loading...", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+	        }
 
         if (state.profileId == profile.id && state.sections.isNotEmpty()) {
             state.sections.forEach { section ->
-                item(key = section.title) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(section.title, style = MaterialTheme.typography.titleLarge)
-                        if (section.subtitle.isNotBlank()) {
-                            Text(section.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+	                item(key = section.title) {
+	                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+	                        Text(section.title, style = MaterialTheme.typography.titleLarge)
+	                        LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(section.items, key = { it.key }) { item ->
                                 ContentPackageCard(
                                     item = item,
@@ -2214,14 +2215,15 @@ private fun ContentDetailDialog(
                             ?: item.shortDescription.ifBlank { "No description provided." },
                     )
                 }
-                if (!detail?.screenshots.isNullOrEmpty()) {
-                    item {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("Screenshots", style = MaterialTheme.typography.titleMedium)
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(detail!!.screenshots) { screenshot ->
-                                    ClickableContentImage(
-                                        url = screenshot,
+	                val screenshots = detail?.screenshots.orEmpty()
+	                if (screenshots.isNotEmpty()) {
+	                    item {
+	                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+	                            Text("Screenshots", style = MaterialTheme.typography.titleMedium)
+	                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+	                                items(screenshots) { screenshot ->
+	                                    ClickableContentImage(
+	                                        url = screenshot,
                                         modifier = Modifier.width(220.dp).aspectRatio(16f / 9f),
                                         onOpen = { zoomImage = it },
                                     )
@@ -2444,11 +2446,12 @@ private fun ContentOperationCard(operation: ContentOperationState) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(operation.title, style = MaterialTheme.typography.titleMedium)
             Text(operation.phase, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            if (determinate) {
-                val progress = (operation.bytesRead.toFloat() / total!!.toFloat()).coerceIn(0f, 1f)
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-                Text(
-                    "${formatBytes(operation.bytesRead)} / ${formatBytes(total)}",
+	            if (determinate) {
+	                val totalBytes = total
+	                val progress = (operation.bytesRead.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+	                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+	                Text(
+	                    "${formatBytes(operation.bytesRead)} / ${formatBytes(totalBytes)}",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
@@ -2477,14 +2480,12 @@ private fun formatBytes(bytes: Long): String = when {
 private fun InstalledContentSummary(packages: List<InstalledPackageEntity>) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Installed content", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                Text("${packages.size}", style = MaterialTheme.typography.labelLarge)
-            }
-            if (packages.isEmpty()) {
-                Text("Install a game first, then add mods or import ZIP archives.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                packages.take(6).forEach { item ->
+	            Row(verticalAlignment = Alignment.CenterVertically) {
+	                Text("Installed content", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+	                Text("${packages.size}", style = MaterialTheme.typography.labelLarge)
+	            }
+	            if (packages.isNotEmpty()) {
+	                packages.take(6).forEach { item ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
                             Text(item.title, style = MaterialTheme.typography.bodyLarge)
@@ -2605,11 +2606,10 @@ private fun PackageSettingsPanel(
         EmptySection(icon, emptyTitle, emptyDetail)
         return
     }
-    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item {
-            Text(title, style = MaterialTheme.typography.headlineSmall)
-            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
+	    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+	        item {
+	            Text(title, style = MaterialTheme.typography.headlineSmall)
+	        }
         if (!canEdit) {
             item {
                 Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
@@ -2620,12 +2620,9 @@ private fun PackageSettingsPanel(
         items(settings) { setting ->
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(setting.title, style = MaterialTheme.typography.titleMedium)
-                    Text("${setting.source} · ${setting.key} · ${setting.type}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (setting.description.isNotBlank()) {
-                        Text(setting.description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (setting.type in setOf("bool", "boolean")) {
+	                    Text(setting.title, style = MaterialTheme.typography.titleMedium)
+	                    Text("${setting.source} · ${setting.key} · ${setting.type}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+	                    if (setting.type in setOf("bool", "boolean")) {
                         Toggle(
                             label = "Enabled",
                             value = values[setting.key].equals("true", ignoreCase = true),
@@ -2952,6 +2949,7 @@ private fun SettingsPanel(
     profile: ServerProfileEntity,
     installedPackages: List<InstalledPackageEntity>,
     onOpenAdvancedSettings: () -> Unit,
+    onOpenContentLibrary: () -> Unit,
     onSaveSettings: ServerSettingsSaver,
 ) {
     val canEdit = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
@@ -2973,18 +2971,70 @@ private fun SettingsPanel(
     var showGames by remember { mutableStateOf(false) }
     var showMapgens by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var autosaveReady by remember(profile.id) { mutableStateOf(false) }
     val parsedPlayers = maxPlayers.toIntOrNull()
     val parsedAutoOffMinutes = autoOffMinutes.toIntOrNull()
     val selectedGameTitle = gamePackages.firstOrNull { it.packageKey == gameKey }?.title
         ?: gameKey
         ?: "No game selected"
-    val valid = name.isNotBlank() &&
-        mapgen in ServerRepository.MAPGENS &&
-        parsedPlayers != null &&
-        parsedPlayers in 1..100 &&
-        (!autoOffEnabled || (parsedAutoOffMinutes != null && parsedAutoOffMinutes in 1..1_440))
+	    val valid = name.isNotBlank() &&
+	        mapgen in ServerRepository.MAPGENS &&
+	        parsedPlayers != null &&
+	        parsedPlayers in 1..100 &&
+	        (!autoOffEnabled || (parsedAutoOffMinutes != null && parsedAutoOffMinutes in 1..1_440))
+	    val hasChanges = name != profile.name ||
+	        engineVersion != profile.engineVersion ||
+	        gameKey != profile.gameKey ||
+	        mapgen != profile.mapgen ||
+	        parsedPlayers != profile.maxPlayers ||
+	        creative != profile.creative ||
+	        damage != profile.damage ||
+	        pvp != profile.pvp ||
+	        autoOffEnabled != profile.autoOffEnabled ||
+	        parsedAutoOffMinutes != profile.autoOffMinutes
 
-    LazyColumn(
+	    LaunchedEffect(name, engineVersion, gameKey, mapgen, maxPlayers, creative, damage, pvp, autoOffEnabled, autoOffMinutes, canEdit, valid, hasChanges) {
+	        if (!autosaveReady) {
+	            autosaveReady = true
+	            return@LaunchedEffect
+	        }
+	        if (!canEdit || !valid || !hasChanges) return@LaunchedEffect
+	        delay(650)
+	        onSaveSettings(
+	            ServerProfileSettingsUpdate(
+	                profileId = profile.id,
+	                name = name,
+	                engineVersion = engineVersion,
+	                gameKey = gameKey,
+	                mapgen = mapgen,
+	                maxPlayers = parsedPlayers,
+	                creative = creative,
+	                damage = damage,
+	                pvp = pvp,
+	                autoOffEnabled = autoOffEnabled,
+	                autoOffMinutes = parsedAutoOffMinutes ?: profile.autoOffMinutes,
+	                serverDescription = profile.serverDescription,
+	                motd = profile.motd,
+	                announceServer = profile.announceServer,
+	                defaultPrivileges = profile.defaultPrivileges,
+	                disallowEmptyPassword = profile.disallowEmptyPassword,
+	                enableRollback = profile.enableRollback,
+	                timeSpeed = profile.timeSpeed,
+	                activeBlockRange = profile.activeBlockRange,
+	                maxBlockSendDistance = profile.maxBlockSendDistance,
+	                maxBlockGenerateDistance = profile.maxBlockGenerateDistance,
+	                dedicatedServerStepMs = profile.dedicatedServerStepMs,
+	                maxObjectsPerBlock = profile.maxObjectsPerBlock,
+	                itemEntityTtl = profile.itemEntityTtl,
+	                maxPacketsPerIteration = profile.maxPacketsPerIteration,
+	                mapgenLimit = profile.mapgenLimit,
+	            ),
+	        ) { result ->
+	            message = result.fold(onSuccess = { null }, onFailure = { it.message ?: "Save failed" })
+	        }
+	    }
+
+	    LazyColumn(
         Modifier.fillMaxSize().padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -3027,16 +3077,13 @@ private fun SettingsPanel(
                 modifier = Modifier.fillMaxWidth().height(56.dp),
             ) { Text("Luanti engine: $engineVersion") }
         }
-        item {
-            FilledTonalButton(
-                onClick = { showGames = true },
-                enabled = canEdit && gamePackages.isNotEmpty(),
-                modifier = Modifier.fillMaxWidth().height(56.dp),
-            ) { Text("Game: $selectedGameTitle") }
-        }
-        if (gamePackages.isEmpty()) {
-            item { Text("Install a game from ContentDB or ZIP Import before selecting one here.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
+	        item {
+	            FilledTonalButton(
+	                onClick = { if (gamePackages.isEmpty()) onOpenContentLibrary() else showGames = true },
+	                enabled = canEdit,
+	                modifier = Modifier.fillMaxWidth().height(56.dp),
+	            ) { Text(if (gamePackages.isEmpty()) "Game: required" else "Game: $selectedGameTitle") }
+	        }
         item {
             FilledTonalButton(
                 onClick = { showMapgens = true },
@@ -3060,60 +3107,19 @@ private fun SettingsPanel(
         item { Toggle("PvP", "Players can hurt each other", pvp, canEdit) { pvp = it } }
         item { HorizontalDivider(Modifier.padding(vertical = 6.dp)) }
         item { Text("Auto off", style = MaterialTheme.typography.headlineSmall) }
-        item { Toggle("Stop when nobody is connected", "Optional timer. LAN has no mandatory idle stop.", autoOffEnabled, canEdit) { autoOffEnabled = it } }
-        item {
-            TextField(
-                value = autoOffMinutes,
-                onValueChange = { autoOffMinutes = it.filter(Char::isDigit).take(4) },
-                enabled = canEdit && autoOffEnabled,
-                label = { Text("Minutes with no players") },
-                supportingText = { Text("From 1 minute to 24 hours. Disabled by default.") },
-                modifier = Modifier.fillMaxWidth(),
-            )
-        }
-        message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) } }
-        item {
-            Button(
-                onClick = {
-                    onSaveSettings(
-                        ServerProfileSettingsUpdate(
-                            profileId = profile.id,
-                            name = name,
-                            engineVersion = engineVersion,
-                            gameKey = gameKey,
-                            mapgen = mapgen,
-                            maxPlayers = parsedPlayers ?: profile.maxPlayers,
-                            creative = creative,
-                            damage = damage,
-                            pvp = pvp,
-                            autoOffEnabled = autoOffEnabled,
-                            autoOffMinutes = parsedAutoOffMinutes ?: profile.autoOffMinutes,
-                            serverDescription = profile.serverDescription,
-                            motd = profile.motd,
-                            announceServer = profile.announceServer,
-                            defaultPrivileges = profile.defaultPrivileges,
-                            disallowEmptyPassword = profile.disallowEmptyPassword,
-                            enableRollback = profile.enableRollback,
-                            timeSpeed = profile.timeSpeed,
-                            activeBlockRange = profile.activeBlockRange,
-                            maxBlockSendDistance = profile.maxBlockSendDistance,
-                            maxBlockGenerateDistance = profile.maxBlockGenerateDistance,
-                            dedicatedServerStepMs = profile.dedicatedServerStepMs,
-                            maxObjectsPerBlock = profile.maxObjectsPerBlock,
-                            itemEntityTtl = profile.itemEntityTtl,
-                            maxPacketsPerIteration = profile.maxPacketsPerIteration,
-                            mapgenLimit = profile.mapgenLimit,
-                        ),
-                    ) { result -> message = result.fold({ it }, { it.message ?: "Save failed" }) }
-                },
-                enabled = canEdit && valid,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Save server settings") }
-        }
-        item {
-            Text("Engine changes are upgrade-only. Free public tunnels still expire after four hours.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
+	        item { Toggle("Stop when nobody is connected", "Stops the server after the selected time with no players.", autoOffEnabled, canEdit) { autoOffEnabled = it } }
+	        item {
+	            TextField(
+	                value = autoOffMinutes,
+	                onValueChange = { autoOffMinutes = it.filter(Char::isDigit).take(4) },
+	                enabled = canEdit && autoOffEnabled,
+	                label = { Text("Minutes with no players") },
+	                supportingText = { Text("1 minute to 24 hours") },
+	                modifier = Modifier.fillMaxWidth(),
+	            )
+	        }
+	        message?.let { item { Text(it, color = if (it.contains("failed", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface) } }
+	    }
 
     if (showVersions) {
         AlertDialog(
@@ -3206,17 +3212,28 @@ private fun SettingsPanel(
 private fun Overview(
     profile: ServerProfileEntity,
     runtime: RuntimeSnapshot?,
-    crashReport: ServerCrashReportEntity?,
-    localPort: Int?,
-    context: Context,
-    onEnsureEngineInstalled: (String, (Result<String>) -> Unit) -> Unit,
-    onStartPublicTunnel: (Activity, String, Int, (Result<String>) -> Unit) -> Unit,
-    onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
+	    crashReport: ServerCrashReportEntity?,
+	    localPort: Int?,
+	    context: Context,
+	    onOpenContentLibrary: () -> Unit,
+	    onEnsureEngineInstalled: (String, (Result<String>) -> Unit) -> Unit,
+	    onStartPublicTunnel: (Activity, String, Int, (Result<String>) -> Unit) -> Unit,
+	    onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
 ) {
-    var publicMessage by remember(profile.id) { mutableStateOf<String?>(null) }
-    var startMessage by remember(profile.id) { mutableStateOf<String?>(null) }
-    var preparingStart by remember(profile.id) { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+	    var publicMessage by remember(profile.id) { mutableStateOf<String?>(null) }
+	    var startMessage by remember(profile.id) { mutableStateOf<String?>(null) }
+	    var preparingStart by remember(profile.id) { mutableStateOf(false) }
+	    fun requestPublicStart() {
+	        val activity = context.findActivity()
+	        if (activity == null) {
+	            publicMessage = "External link requires an active app screen"
+	        } else {
+	            onStartPublicTunnel(activity, profile.id, localPort ?: 0) { result ->
+	                publicMessage = result.fold({ it }, { it.message ?: "External link failed" })
+	            }
+	        }
+	    }
+	    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         val runtimeState = runtime?.state
         val staleActiveState = runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
         val running = runtimeState in setOf("STARTING", "RUNNING", "STOPPING")
@@ -3254,14 +3271,18 @@ private fun Overview(
                 context = context,
             )
         }
-        if (profile.gameKey == null) item {
-            Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.FolderZip, null, tint = MaterialTheme.colorScheme.tertiary)
-                    Spacer(Modifier.width(12.dp)); Column { Text("Game required", fontWeight = FontWeight.SemiBold); Text("Open Content and import a game ZIP before starting.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-            }
-        }
+	        if (profile.gameKey == null) item {
+	            Card(
+	                onClick = onOpenContentLibrary,
+	                border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary),
+	                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+	            ) {
+	                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+	                    Icon(Icons.Default.FolderZip, null, tint = MaterialTheme.colorScheme.tertiary)
+	                    Spacer(Modifier.width(12.dp)); Text("Game required", fontWeight = FontWeight.SemiBold)
+	                }
+	            }
+	        }
         item {
             Button(onClick = {
                 if (running) OrchestratorService.stop(context, profile.id) else {
@@ -3317,36 +3338,27 @@ private fun Overview(
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.tertiary); Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text("Public access", style = MaterialTheme.typography.titleMedium)
-                            Text("Optional NovaX UDP tunnel · LAN never needs an account", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Text(if (publicEnabled) "On" else "Off", style = MaterialTheme.typography.labelLarge)
-                    }
-                    if (publicEnabled) {
-                        Text("$publicHost:$publicPort", style = MaterialTheme.typography.headlineSmall)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilledTonalButton(onClick = { copy(context, "$publicHost:$publicPort") }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy") }
-                            Button(onClick = { onStopPublicTunnel(profile.id) { result -> publicMessage = result.fold({ it }, { it.message ?: "Tunnel stop failed" }) } }) { Text("Stop public") }
-                        }
-                    } else {
-                        Button(
-                            onClick = {
-                                val activity = context.findActivity()
-                                if (activity == null) {
-                                    publicMessage = "Public tunnel requires an active app screen"
-                                } else {
-                                    onStartPublicTunnel(activity, profile.id, localPort ?: 0) { result ->
-                                        publicMessage = result.fold({ it }, { it.message ?: "Tunnel start failed" })
-                                    }
-                                }
-                            },
-                            enabled = running && localPort != null && localPort > 0,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) { Text("Start public tunnel") }
-                    }
+	                    Row(verticalAlignment = Alignment.CenterVertically) {
+	                        Icon(Icons.Default.Cloud, null, tint = MaterialTheme.colorScheme.tertiary); Spacer(Modifier.width(12.dp))
+	                        Column(Modifier.weight(1f)) {
+	                            Text("External link", style = MaterialTheme.typography.titleMedium)
+	                        }
+	                        Switch(
+	                            checked = publicEnabled,
+	                            onCheckedChange = { checked ->
+	                                if (checked) requestPublicStart() else onStopPublicTunnel(profile.id) { result ->
+	                                    publicMessage = result.fold({ it }, { it.message ?: "External link stop failed" })
+	                                }
+	                            },
+	                            enabled = publicEnabled || (running && localPort != null && localPort > 0),
+	                        )
+	                    }
+	                    if (publicEnabled) {
+	                        Text("$publicHost:$publicPort", style = MaterialTheme.typography.headlineSmall)
+	                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+	                            FilledTonalButton(onClick = { copy(context, "$publicHost:$publicPort") }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(6.dp)); Text("Copy") }
+	                        }
+	                    }
                     publicMessage?.let { Text(it, color = if (it.contains("failed", ignoreCase = true) || it.contains("required", ignoreCase = true)) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant) }
                 }
             }

@@ -277,7 +277,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val expiresAt = visibleExpiry?.let { Instant.parse(it).toEpochMilli() } ?: 0L
                 entitlementStore.update(tier, expiresAt)
                 _account.value = currentAccountState(tier = tier, expiresAt = visibleExpiry)
-                "NovaX entitlement: ${response.tier}"
+                "Premium status: ${response.tier}"
             })
         }
     }

@@ -45,11 +45,11 @@ class AccountGateway(private val context: Context) {
     }
 
     suspend fun freshIdToken(): String {
-        val user = requireNotNull(auth?.currentUser) { "Sign in before using NovaX public tunnels" }
+        val user = requireNotNull(auth?.currentUser) { "Sign in before using external links" }
         user.reload().await()
-        val refreshed = requireNotNull(auth?.currentUser) { "Sign in before using NovaX public tunnels" }
+        val refreshed = requireNotNull(auth?.currentUser) { "Sign in before using external links" }
         if (!refreshed.isEmailVerified && !refreshed.hasTrustedOAuthProvider()) {
-            throw IllegalStateException("Verify your email before using NovaX public tunnels")
+            throw IllegalStateException("Verify your email before using external links")
         }
         return requireNotNull(refreshed.getIdToken(true).await().token) { "Firebase did not return an ID token" }
     }

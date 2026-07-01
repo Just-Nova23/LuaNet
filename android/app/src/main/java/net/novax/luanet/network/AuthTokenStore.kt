@@ -16,7 +16,7 @@ class AuthTokenStore(context: Context) {
 
     fun bearerToken(): String? = preferences.getString(KEY_BEARER_TOKEN, null)?.takeIf { it.isNotBlank() }
 
-    fun requireBearerToken(): String = bearerToken() ?: error("NovaX account token is required for public tunnels")
+    fun requireBearerToken(): String = bearerToken() ?: error("Sign in before using external links")
 
     fun updateBearerToken(value: String) {
         preferences.edit().putString(KEY_BEARER_TOKEN, value.trim()).apply()
