@@ -854,9 +854,54 @@ private fun CreditsScreen(onBack: () -> Unit) {
             item {
                 CreditLinkCard(
                     icon = Icons.Default.Code,
-                    title = "GitHub",
+                    title = "App source",
                     detail = "github.com/Just-Nova23/LuaNet",
                     url = "https://github.com/Just-Nova23/LuaNet",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Info,
+                    title = "Privacy policy",
+                    detail = "luanet.novaxhosting.com/privacy.html",
+                    url = "https://luanet.novaxhosting.com/privacy.html",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Info,
+                    title = "Terms",
+                    detail = "luanet.novaxhosting.com/terms.html",
+                    url = "https://luanet.novaxhosting.com/terms.html",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.AccountCircle,
+                    title = "Account deletion",
+                    detail = "luanet.novaxhosting.com/delete-account.html",
+                    url = "https://luanet.novaxhosting.com/delete-account.html",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Code,
+                    title = "Licenses",
+                    detail = "luanet.novaxhosting.com/licenses.html",
+                    url = "https://luanet.novaxhosting.com/licenses.html",
+                    context = context,
+                )
+            }
+            item {
+                CreditLinkCard(
+                    icon = Icons.Default.Language,
+                    title = "NovaX status",
+                    detail = "status.novaxhosting.com",
+                    url = "https://status.novaxhosting.com",
                     context = context,
                 )
             }
