@@ -59,16 +59,39 @@ jobs:
       - run: FRPC_ARTIFACT=tunnel/build/android-arm64/libfrpc.so bash engine/scripts/sync-android-artifacts.sh
       - run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
         working-directory: android
-      - run: unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep 'lib/arm64-v8a/libfrpc.so'
-      - run: |
-          python3 - <<'PY' > /tmp/luanet-engine-libraries
+      - name: Verify native packaging
+        run: |
+          python3 - <<'PY'
           import json
-          for item in json.load(open("engine/catalog.json"))["engines"]:
-              print(f"lib/arm64-v8a/lib{item['library']}.so")
+          import subprocess
+          from pathlib import Path
+
+          apk = Path("android/app/build/outputs/apk/debug/app-debug.apk")
+          listing = subprocess.check_output(["unzip", "-l", str(apk)], text=True)
+          catalog = json.load(open("engine/catalog.json"))["engines"]
+          base = [item for item in catalog if item.get("base")]
+          legacy = [item for item in catalog if not item.get("base")]
+
+          failures = []
+          expected_base = ["lib/arm64-v8a/libfrpc.so"] + [
+              f"lib/arm64-v8a/lib{item['library']}.so" for item in base
+          ]
+          for library in expected_base:
+              if library not in listing:
+                  failures.append(f"missing from base APK: {library}")
+
+          legacy_dir = Path("android/engine_legacy/build/intermediates/merged_native_libs/debug/mergeDebugNativeLibs/out/lib/arm64-v8a")
+          for item in legacy:
+              legacy_library = legacy_dir / f"lib{item['library']}.so"
+              if not legacy_library.is_file():
+                  failures.append(f"missing from engine_legacy module: {legacy_library}")
+              if f"lib/arm64-v8a/lib{item['library']}.so" in listing:
+                  failures.append(f"legacy engine should not be in base APK: lib{item['library']}.so")
+
+          if failures:
+              raise SystemExit("\n".join(failures))
+          print(f"Verified {len(expected_base)} base native libraries and {len(legacy)} legacy engine libraries.")
           PY
-          while read -r library; do
-            unzip -l android/app/build/outputs/apk/debug/app-debug.apk | grep "$library"
-          done < /tmp/luanet-engine-libraries
       - uses: actions/upload-artifact@v5
         with:
           name: luanet-debug-apk
