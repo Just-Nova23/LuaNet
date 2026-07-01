@@ -20,6 +20,9 @@ interface LuaNetDao {
     @Query("SELECT * FROM server_profiles WHERE state IN ('STARTING','RUNNING','STOPPING')")
     suspend fun activeProfiles(): List<ServerProfileEntity>
 
+    @Query("SELECT * FROM server_profiles WHERE state='CRASHED'")
+    suspend fun crashedProfiles(): List<ServerProfileEntity>
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insertProfile(profile: ServerProfileEntity)
 
@@ -80,4 +83,10 @@ interface LuaNetDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertConfigSetting(setting: ServerConfigSettingEntity)
+
+    @Query("SELECT * FROM server_crash_reports WHERE profileId=:profileId ORDER BY createdAt DESC LIMIT 1")
+    fun observeLatestCrashReport(profileId: String): Flow<ServerCrashReportEntity?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertCrashReport(report: ServerCrashReportEntity)
 }

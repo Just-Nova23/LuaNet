@@ -100,31 +100,36 @@ class OrchestratorService : Service() {
         val limits = EntitlementPolicy.forTier(entitlement.current())
         val limit = limits.activeServers
         if (sessions.size >= limit) {
-            repository.updateRuntime(profileId, ServerState.CRASHED, null)
-            RuntimeRegistry.update(profileId) { RuntimeSnapshot(profileId, "FREE_LIMIT", -1, 0) }
+            startBlocked(
+                profileId = profileId,
+                message = "Free limit reached. Stop another server before starting this one.",
+            )
             return
         }
         val slot = waitForReusableSlot(profile.id) ?: run {
             val text = "No isolated engine slot is ready. Wait for the previous Luanti stop to finish, then start again."
-            repository.updateRuntime(profileId, ServerState.CRASHED, null)
-            RuntimeRegistry.update(profileId) {
-                RuntimeSnapshot(profileId, "CRASHED", -1, 0, logs = listOf(text))
-            }
+            startBlocked(profileId, text)
             return
         }
         val port = 30_000 + slot
-        val release = EngineCatalog.find(profile.engineVersion) ?: return
+        val release = EngineCatalog.find(profile.engineVersion) ?: run {
+            startBlocked(profileId, "Unknown engine ${profile.engineVersion}. Choose a supported Luanti version in server settings.")
+            return
+        }
         if (!hasBundledLibrary(release.libraryName)) {
-            val text = "Engine ${profile.engineVersion} is not bundled in this APK. Build native artifacts and sync them before starting this server."
-            repository.updateRuntime(profileId, ServerState.CRASHED, null)
-            RuntimeRegistry.update(profileId) { RuntimeSnapshot(profileId, "CRASHED", -1, 0, logs = listOf(text)) }
+            val text = "Engine ${profile.engineVersion} is not installed in this build. Install that engine package or change the server to an installed engine."
+            startBlocked(profileId, text)
             return
         }
         val root = repository.profileDirectory(profile.id).apply { mkdirs() }
         runCatching { ensureRuntimeAssets(root, profile.engineVersion) }.onFailure { error ->
             val text = "Engine ${profile.engineVersion} runtime assets are missing or invalid: ${error.message}"
-            repository.updateRuntime(profileId, ServerState.CRASHED, null)
-            RuntimeRegistry.update(profileId) { RuntimeSnapshot(profileId, "CRASHED", -1, 0, logs = listOf(text)) }
+            startBlocked(
+                profileId = profileId,
+                message = text,
+                reportReason = "Runtime asset error",
+                reportDetail = "${error.javaClass.simpleName}: ${error.message ?: "Runtime assets could not be installed"}",
+            )
             return
         }
         val world = File(root, "world").apply { mkdirs() }
@@ -239,11 +244,45 @@ class OrchestratorService : Service() {
             }
             override fun onServiceDisconnected(name: ComponentName?) {
                 if (sessions.containsKey(profileId)) {
-                    engineEnded(profileId, "CRASHED")
+                    engineEnded(
+                        profileId = profileId,
+                        state = "CRASHED",
+                        reason = "Engine service disconnected",
+                        detail = "Android disconnected the isolated engine service while LuaNet still tracked it as running.",
+                    )
                 }
             }
         }
         bindService(Intent(this, slotClass(slot)), connection, Context.BIND_AUTO_CREATE or Context.BIND_IMPORTANT)
+    }
+
+    private suspend fun startBlocked(
+        profileId: String,
+        message: String,
+        reportReason: String? = null,
+        reportDetail: String = message,
+    ) {
+        repository.updateRuntime(profileId, ServerState.STOPPED, null)
+        repository.updatePublic(profileId, false, null, null)
+        repository.markAllPlayersOffline(profileId)
+        val report = reportReason?.let { repository.recordCrash(profileId, it, reportDetail) }
+        val lines = buildList {
+            add(message)
+            if (report != null) add("Support code: ${report.code}")
+        }
+        RuntimeRegistry.update(profileId) { previous ->
+            previous?.copy(
+                state = "STOPPED",
+                slot = -1,
+                localPort = 0,
+                logs = (previous.logs + lines).takeLast(2_000),
+                publicHost = null,
+                publicPort = null,
+                publicExpiresAt = null,
+            ) ?: RuntimeSnapshot(profileId, "STOPPED", -1, 0, logs = lines)
+        }
+        updateNotification()
+        if (sessions.isEmpty()) stopSelf()
     }
 
     private fun stopProfile(profileId: String) {
@@ -268,7 +307,7 @@ class OrchestratorService : Service() {
         }
     }
 
-    private fun engineEnded(profileId: String, state: String) {
+    private fun engineEnded(profileId: String, state: String, reason: String = "", detail: String = "", exitCode: Int? = null) {
         val engine = sessions.remove(profileId)
         if (engine == null && state == "CRASHED") return
         stopPublicTunnel(profileId)
@@ -277,17 +316,53 @@ class OrchestratorService : Service() {
         pendingPlayerActions.remove(profileId)
         if (engine != null) runCatching { unbindService(engine.connection) }
         val serverState = runCatching { ServerState.valueOf(state) }.getOrDefault(ServerState.CRASHED)
-        scope.launch { repository.updateRuntime(profileId, serverState, null) }
-        scope.launch { repository.markAllPlayersOffline(profileId) }
+        val crashReason = reason.ifBlank { "Engine process stopped unexpectedly" }
+        val crashDetail = buildCrashDetail(profileId, crashReason, detail, exitCode)
         RuntimeRegistry.update(profileId) { previous ->
+            val lines = buildList {
+                if (state == "CRASHED") {
+                    add("Crash: $crashReason")
+                    if (exitCode != null) add("Exit code: $exitCode")
+                }
+                add("State: ${state.lowercase().replaceFirstChar(Char::uppercase)}")
+            }
             previous?.copy(
                 state = state,
                 localPort = 0,
-                logs = (previous.logs + "State: ${state.lowercase().replaceFirstChar(Char::uppercase)}").takeLast(2_000),
+                logs = (previous.logs + lines).takeLast(2_000),
             )
         }
-        updateNotification()
-        if (sessions.isEmpty()) stopSelf()
+        scope.launch {
+            if (serverState == ServerState.CRASHED) {
+                val report = repository.recordCrash(profileId, crashReason, crashDetail)
+                RuntimeRegistry.update(profileId) { previous ->
+                    previous?.copy(logs = (previous.logs + "Support code: ${report.code}").takeLast(2_000))
+                }
+            }
+            repository.updateRuntime(profileId, serverState, null)
+            repository.markAllPlayersOffline(profileId)
+            mainHandler.post {
+                updateNotification()
+                if (sessions.isEmpty()) stopSelf()
+            }
+        }
+    }
+
+    private fun buildCrashDetail(profileId: String, reason: String, detail: String, exitCode: Int?): String {
+        val recentLogs = RuntimeRegistry.sessions.value[profileId]?.logs.orEmpty().takeLast(80)
+        return buildString {
+            appendLine("Reason: $reason")
+            if (exitCode != null) appendLine("Exit code: $exitCode")
+            if (detail.isNotBlank()) {
+                appendLine()
+                appendLine(detail)
+            }
+            if (recentLogs.isNotEmpty()) {
+                appendLine()
+                appendLine("Recent console:")
+                recentLogs.forEach { appendLine(it) }
+            }
+        }.trim()
     }
 
     private fun startPublicTunnel(profileId: String, leaseJson: String) {
@@ -366,7 +441,20 @@ class OrchestratorService : Service() {
             when (message.what) {
                 EngineProtocol.STATE -> {
                     val state = message.data.getString(EngineProtocol.KEY_STATE).orEmpty()
-                    if (state == "STOPPED" || state == "CRASHED") engineEnded(profileId, state)
+                    if (state == "STOPPED" || state == "CRASHED") {
+                        val exitCode = if (message.data.containsKey(EngineProtocol.KEY_EXIT_CODE)) {
+                            message.data.getInt(EngineProtocol.KEY_EXIT_CODE)
+                        } else {
+                            null
+                        }
+                        engineEnded(
+                            profileId = profileId,
+                            state = state,
+                            reason = message.data.getString(EngineProtocol.KEY_REASON).orEmpty(),
+                            detail = message.data.getString(EngineProtocol.KEY_DETAIL).orEmpty(),
+                            exitCode = exitCode,
+                        )
+                    }
                     else updateEngineState(profileId, state)
                 }
                 EngineProtocol.LOG -> recordEngineLine(profileId, message.data.getString(EngineProtocol.KEY_TEXT).orEmpty())

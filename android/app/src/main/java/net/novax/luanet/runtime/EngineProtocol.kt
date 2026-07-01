@@ -18,6 +18,9 @@ object EngineProtocol {
     const val KEY_TEXT = "text"
     const val KEY_STATE = "state"
     const val KEY_PROFILE_ID = "profile_id"
+    const val KEY_REASON = "reason"
+    const val KEY_DETAIL = "detail"
+    const val KEY_EXIT_CODE = "exit_code"
 
     fun send(target: Messenger, what: Int, replyTo: Messenger? = null, values: Bundle.() -> Unit = {}) {
         target.send(Message.obtain(null, what).apply {

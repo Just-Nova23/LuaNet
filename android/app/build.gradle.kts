@@ -63,10 +63,29 @@ val admobAppId = providers.gradleProperty("LUANET_ADMOB_APP_ID")
 val admobInterstitialId = providers.gradleProperty("LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID")
     .orElse(providers.environmentVariable("LUANET_ADMOB_PUBLIC_INTERSTITIAL_ID"))
     .orElse("ca-app-pub-3940256099942544/1033173712")
+val legacyEngineLibraries = listOf(
+    "libluanet_engine_5_0_1.so",
+    "libluanet_engine_5_1_1.so",
+    "libluanet_engine_5_2_0.so",
+    "libluanet_engine_5_3_0.so",
+    "libluanet_engine_5_4_1.so",
+    "libluanet_engine_5_5_1.so",
+    "libluanet_engine_5_6_1.so",
+    "libluanet_engine_5_7_0.so",
+    "libluanet_engine_5_8_0.so",
+    "libluanet_engine_5_9_1.so",
+    "libluanet_engine_5_10_0.so",
+    "libluanet_engine_5_11_0.so",
+    "libluanet_engine_5_12_0.so",
+    "libluanet_engine_5_13_0.so",
+    "libluanet_engine_5_14_0.so",
+    "libluanet_engine_5_15_2.so",
+)
 
 android {
     namespace = "net.novax.luanet"
     compileSdk = 35
+    dynamicFeatures += setOf(":engine_legacy")
 
     defaultConfig {
         applicationId = "net.novax.luanet"
@@ -131,6 +150,7 @@ android {
     }
     sourceSets["main"].jniLibs.srcDir(layout.projectDirectory.dir("../../engine/build/android-jni"))
     packaging.resources.excludes += setOf("META-INF/LICENSE*", "META-INF/NOTICE*")
+    packaging.jniLibs.excludes += legacyEngineLibraries.map { "**/$it" }
 }
 
 kotlin {
@@ -257,6 +277,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-ads:25.3.0")
     implementation("com.google.android.ump:user-messaging-platform:4.0.0")
     implementation("com.android.billingclient:billing-ktx:9.1.0")
+    implementation("com.google.android.play:feature-delivery:2.1.0")
+    implementation("com.google.android.play:feature-delivery-ktx:2.1.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

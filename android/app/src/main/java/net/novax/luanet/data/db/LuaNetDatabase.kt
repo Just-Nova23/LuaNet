@@ -13,8 +13,9 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         BackupEntity::class,
         ServerPlayerEntity::class,
         ServerConfigSettingEntity::class,
+        ServerCrashReportEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -78,6 +79,25 @@ abstract class LuaNetDatabase : RoomDatabase() {
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("ALTER TABLE server_players ADD COLUMN privileges TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("""
+                    CREATE TABLE IF NOT EXISTS server_crash_reports (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        profileId TEXT NOT NULL,
+                        code TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        detail TEXT NOT NULL,
+                        engineVersion TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(profileId) REFERENCES server_profiles(id) ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_server_crash_reports_profileId ON server_crash_reports(profileId)")
+                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_server_crash_reports_profileId_code ON server_crash_reports(profileId, code)")
             }
         }
     }

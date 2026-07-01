@@ -125,3 +125,22 @@ data class ServerConfigSettingEntity(
     val value: String,
     val updatedAt: Long,
 )
+
+@Entity(
+    tableName = "server_crash_reports",
+    foreignKeys = [ForeignKey(
+        entity = ServerProfileEntity::class,
+        parentColumns = ["id"], childColumns = ["profileId"],
+        onDelete = ForeignKey.CASCADE,
+    )],
+    indices = [Index("profileId"), Index(value = ["profileId", "code"], unique = true)],
+)
+data class ServerCrashReportEntity(
+    @PrimaryKey val id: String,
+    val profileId: String,
+    val code: String,
+    val reason: String,
+    val detail: String,
+    val engineVersion: String,
+    val createdAt: Long,
+)

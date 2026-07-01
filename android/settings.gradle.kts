@@ -16,4 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "LuaNet"
 include(":app")
-
+include(":engine_legacy")

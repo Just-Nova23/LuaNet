@@ -125,6 +125,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import io.noties.markwon.Markwon
+import net.novax.luanet.data.db.ServerCrashReportEntity
 import net.novax.luanet.data.db.ServerProfileEntity
 import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.data.db.ServerPlayerEntity
@@ -164,11 +165,16 @@ private typealias ServerSettingsSaver = (
 
 @Composable
 fun LuaNetApp(viewModel: MainViewModel) {
+    val profilesLoaded by viewModel.profilesLoaded.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
     val content by viewModel.content.collectAsStateWithLifecycle()
     val contentDetails by viewModel.contentDetails.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
     var destination: Destination by remember { mutableStateOf(Destination.Servers) }
+    if (!profilesLoaded) {
+        StartupLoadingScreen()
+        return
+    }
     when (val current = destination) {
         Destination.Servers -> ServerList(
             profiles = profiles,
@@ -212,10 +218,12 @@ fun LuaNetApp(viewModel: MainViewModel) {
             val players by viewModel.players(current.id).collectAsStateWithLifecycle(emptyList())
             val gameSettings by viewModel.gameSettings(current.id).collectAsStateWithLifecycle(emptyList())
             val modSettings by viewModel.modSettings(current.id).collectAsStateWithLifecycle(emptyList())
+            val crashReport by viewModel.latestCrashReport(current.id).collectAsStateWithLifecycle(null)
             Dashboard(
                 profile = profiles.firstOrNull { it.id == current.id },
                 installedPackages = installedPackages,
                 players = players,
+                crashReport = crashReport,
                 onBack = { destination = Destination.Servers },
                 onOpenContentLibrary = { destination = Destination.ContentLibrary(current.id) },
                 onOpenZipImport = { destination = Destination.ZipImport(current.id) },
@@ -227,6 +235,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 hasModSettings = modSettings.isNotEmpty(),
                 onSaveServerSettings = viewModel::updateServerSettings,
                 onCreateBackup = viewModel::createBackup,
+                onEnsureEngineInstalled = viewModel::ensureEngineInstalled,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
                 onStopPublicTunnel = viewModel::stopPublicTunnel,
                 onSetPlayerAdminOffline = viewModel::setPlayerAdminOffline,
@@ -322,6 +331,30 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 onSetPrivilegeOffline = viewModel::setPlayerPrivilegeOffline,
                 onUnbanOffline = viewModel::unbanPlayerOffline,
             )
+        }
+    }
+}
+
+@Composable
+private fun StartupLoadingScreen() {
+    Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(
+            Modifier.fillMaxSize().padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Surface(shape = MaterialTheme.shapes.large, color = MaterialTheme.colorScheme.primaryContainer) {
+                Icon(
+                    painterResource(R.drawable.ic_luanet),
+                    contentDescription = "LuaNet",
+                    modifier = Modifier.padding(18.dp).size(72.dp),
+                    tint = Color.Unspecified,
+                )
+            }
+            Spacer(Modifier.height(24.dp))
+            CircularProgressIndicator()
+            Spacer(Modifier.height(16.dp))
+            Text("Loading LuaNet", style = MaterialTheme.typography.titleMedium)
         }
     }
 }
@@ -1215,6 +1248,7 @@ private fun Dashboard(
     profile: ServerProfileEntity?,
     installedPackages: List<InstalledPackageEntity>,
     players: List<ServerPlayerEntity>,
+    crashReport: ServerCrashReportEntity?,
     onBack: () -> Unit,
     onOpenContentLibrary: () -> Unit,
     onOpenZipImport: () -> Unit,
@@ -1226,6 +1260,7 @@ private fun Dashboard(
     hasModSettings: Boolean,
     onSaveServerSettings: ServerSettingsSaver,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
+    onEnsureEngineInstalled: (String, (Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (Activity, String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
     onSetPlayerAdminOffline: (String, String, Boolean, (Result<String>) -> Unit) -> Unit,
@@ -1273,10 +1308,12 @@ private fun Dashboard(
                 DashboardTabKey.OVERVIEW -> Overview(
                     profile = profile,
                     runtime = runtime,
+                    crashReport = crashReport,
                     localPort = runtime?.localPort ?: profile.localPort?.takeUnless {
                         runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
                     },
                     context = context,
+                    onEnsureEngineInstalled = onEnsureEngineInstalled,
                     onStartPublicTunnel = onStartPublicTunnel,
                     onStopPublicTunnel = onStopPublicTunnel,
                 )
@@ -3072,17 +3109,22 @@ private fun SettingsPanel(
 private fun Overview(
     profile: ServerProfileEntity,
     runtime: RuntimeSnapshot?,
+    crashReport: ServerCrashReportEntity?,
     localPort: Int?,
     context: Context,
+    onEnsureEngineInstalled: (String, (Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (Activity, String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
 ) {
     var publicMessage by remember(profile.id) { mutableStateOf<String?>(null) }
+    var startMessage by remember(profile.id) { mutableStateOf<String?>(null) }
+    var preparingStart by remember(profile.id) { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         val runtimeState = runtime?.state
         val staleActiveState = runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
         val running = runtimeState in setOf("STARTING", "RUNNING", "STOPPING")
-        val state = runtimeState ?: if (staleActiveState) "CRASHED" else profile.state.name
+        val state = runtimeState ?: if (staleActiveState) "STOPPED" else profile.state.name
+        val displayProfileState = if (staleActiveState) ServerState.STOPPED else profile.state
         val publicHost = runtime?.publicHost ?: profile.publicHost
         val publicPort = runtime?.publicPort ?: profile.publicPort
         val publicEnabled = !staleActiveState && publicHost != null && publicPort != null && (runtime?.publicPort != null || profile.publicEnabled)
@@ -3091,14 +3133,29 @@ private fun Overview(
             Card(colors = CardDefaults.cardColors(containerColor = if (running) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
                 Column(Modifier.padding(20.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(12.dp).background(if (running) MaterialTheme.colorScheme.primary else if (staleActiveState) MaterialTheme.colorScheme.error else stateColor(profile.state), CircleShape))
-                        Spacer(Modifier.width(10.dp)); Text(state.lowercase().replaceFirstChar(Char::uppercase), style = MaterialTheme.typography.titleMedium)
+                        Box(Modifier.size(12.dp).background(if (running) MaterialTheme.colorScheme.primary else stateColor(displayProfileState), CircleShape))
+                        Spacer(Modifier.width(10.dp)); Text(serverStateLabel(state), style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.weight(1f)); Text("${profile.maxPlayers} slots", style = MaterialTheme.typography.labelLarge)
                     }
                     Spacer(Modifier.height(14.dp))
-                    Text(if (running) "Server is available on this device and your local network." else "Ready when you are.", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        when {
+                            running -> "Server is available on this device and your local network."
+                            staleActiveState -> "LuaNet was restarted or updated while this server was active. The local state was reset to stopped; start it again when ready."
+                            profile.state == ServerState.CRASHED -> "The engine crashed during this app session. Check the support code below."
+                            else -> "Ready when you are."
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
             }
+        }
+        if (profile.state == ServerState.CRASHED || crashReport != null) item {
+            CrashReportCard(
+                report = crashReport,
+                activeCrash = profile.state == ServerState.CRASHED,
+                context = context,
+            )
         }
         if (profile.gameKey == null) item {
             Card(border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
@@ -3111,13 +3168,36 @@ private fun Overview(
         item {
             Button(onClick = {
                 if (running) OrchestratorService.stop(context, profile.id) else {
+                    preparingStart = true
+                    startMessage = "Checking engine ${profile.engineVersion}…"
                     requestNotificationPermission(context)
                     requestBackgroundHostingExemption(context)
-                    OrchestratorService.start(context, profile.id)
+                    onEnsureEngineInstalled(profile.engineVersion) { result ->
+                        preparingStart = false
+                        result.onSuccess { message ->
+                            startMessage = message.takeIf { it.isNotBlank() && !it.contains("included", ignoreCase = true) && !it.contains("already installed", ignoreCase = true) }
+                            OrchestratorService.start(context, profile.id)
+                        }.onFailure { error ->
+                            startMessage = error.message ?: "Engine install failed"
+                        }
+                    }
                 }
-            }, enabled = running || profile.gameKey != null, modifier = Modifier.fillMaxWidth().height(58.dp)) {
+            }, enabled = running || (profile.gameKey != null && !preparingStart), modifier = Modifier.fillMaxWidth().height(58.dp)) {
                 Icon(if (running) Icons.Default.Stop else Icons.Default.PlayArrow, null)
-                Spacer(Modifier.width(8.dp)); Text(if (running) "Stop server" else "Start server")
+                Spacer(Modifier.width(8.dp)); Text(if (running) "Stop server" else if (preparingStart) "Preparing engine" else "Start server")
+            }
+        }
+        startMessage?.let { message ->
+            item {
+                Text(
+                    message,
+                    color = if (message.contains("failed", ignoreCase = true) || message.contains("not included", ignoreCase = true)) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
         if (localPort != null && localPort > 0) item {
@@ -3178,7 +3258,84 @@ private fun Overview(
     }
 }
 
+@Composable
+private fun CrashReportCard(
+    report: ServerCrashReportEntity?,
+    activeCrash: Boolean,
+    context: Context,
+) {
+    val title = if (activeCrash) "Server crashed" else "Last engine problem"
+    val reportText = if (report == null) {
+        "No support report was recorded for this crash."
+    } else {
+        buildString {
+            appendLine("Code: ${report.code}")
+            appendLine("Reason: ${report.reason}")
+            if (report.engineVersion.isNotBlank()) appendLine("Engine: ${report.engineVersion}")
+            appendLine("Time: ${formatCrashTime(report.createdAt)}")
+            if (report.detail.isNotBlank()) {
+                appendLine()
+                append(report.detail)
+            }
+        }.trim()
+    }
+    Card(
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.error),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+    ) {
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.BugReport, null, tint = MaterialTheme.colorScheme.error)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                    Text(
+                        "Send the support code to LuaNet support if you report this.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
+            if (report != null) {
+                Text("Support code", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onErrorContainer)
+                Text(report.code, style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onErrorContainer)
+                Text(report.reason, color = MaterialTheme.colorScheme.onErrorContainer)
+                if (report.detail.isNotBlank()) {
+                    Text(
+                        report.detail.take(700),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            } else {
+                Text(reportText, color = MaterialTheme.colorScheme.onErrorContainer)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (report != null) {
+                    FilledTonalButton(onClick = { copy(context, report.code) }) {
+                        Icon(Icons.Default.ContentCopy, null)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Copy code")
+                    }
+                }
+                FilledTonalButton(onClick = { copy(context, reportText) }) {
+                    Icon(Icons.Default.ContentCopy, null)
+                    Spacer(Modifier.width(6.dp))
+                    Text("Copy report")
+                }
+            }
+        }
+    }
+}
+
 @Composable private fun Placeholder(text: String) = Column(Modifier.padding(20.dp)) { Text(text) }
+
+private fun serverStateLabel(state: String): String =
+    state.lowercase().replace('_', ' ').replaceFirstChar(Char::uppercase)
+
+private fun formatCrashTime(createdAt: Long): String =
+    java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.SHORT)
+        .format(java.util.Date(createdAt))
 
 private fun copy(context: Context, text: String) {
     (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("LuaNet address", text))

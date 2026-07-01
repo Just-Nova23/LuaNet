@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.withContext
 import net.novax.luanet.data.db.InstalledPackageEntity
 import net.novax.luanet.data.db.LuaNetDao
+import net.novax.luanet.data.db.ServerCrashReportEntity
 import net.novax.luanet.data.db.ServerConfigSettingEntity
 import net.novax.luanet.data.db.ServerPlayerEntity
 import net.novax.luanet.data.db.ServerProfileEntity
@@ -121,6 +122,7 @@ class ServerRepository(
     fun observePlayers(profileId: String) = dao.observePlayers(profileId)
     suspend fun configSettings(profileId: String) = dao.configSettings(profileId)
     fun observeConfigSettings(profileId: String) = dao.observeConfigSettings(profileId)
+    fun observeLatestCrashReport(profileId: String) = dao.observeLatestCrashReport(profileId)
     fun observeModSettings(profileId: String): Flow<List<ServerModSetting>> =
         combine(dao.observeConfigSettings(profileId), dao.observePackages(profileId)) { saved, packages ->
             modSettingDefinitions(profileId, packages, saved.associate { it.key to it.value })
@@ -135,14 +137,32 @@ class ServerRepository(
         dao.updatePublic(id, enabled, host, port, System.currentTimeMillis())
 
     suspend fun recoverAbandonedRuntimeStates(liveProfileIds: Set<String> = emptySet()): Int {
-        val abandoned = activeProfiles().filterNot { it.id in liveProfileIds }
+        val abandoned = (activeProfiles() + dao.crashedProfiles()).distinctBy { it.id }.filterNot { it.id in liveProfileIds }
         if (abandoned.isEmpty()) return 0
         val now = System.currentTimeMillis()
         abandoned.forEach { profile ->
-            dao.updateRuntime(profile.id, ServerState.CRASHED, null, now)
+            dao.updateRuntime(profile.id, ServerState.STOPPED, null, now)
             dao.updatePublic(profile.id, false, null, null, now)
+            dao.markAllPlayersOffline(profile.id, now)
         }
         return abandoned.size
+    }
+
+    suspend fun recordCrash(profileId: String, reason: String, detail: String): ServerCrashReportEntity {
+        val now = System.currentTimeMillis()
+        val profile = dao.profile(profileId)
+        val code = crashCode(profileId, now)
+        val report = ServerCrashReportEntity(
+            id = UUID.randomUUID().toString(),
+            profileId = profileId,
+            code = code,
+            reason = reason.take(180),
+            detail = detail.take(8_000),
+            engineVersion = profile?.engineVersion.orEmpty(),
+            createdAt = now,
+        )
+        dao.insertCrashReport(report)
+        return report
     }
 
     suspend fun updateAutoOff(id: String, enabled: Boolean, minutes: Int) {
@@ -704,6 +724,11 @@ class ServerRepository(
         .distinct()
         .joinToString(",")
         .ifBlank { "interact,shout" }
+    private fun crashCode(profileId: String, now: Long): String {
+        val time = now.toString(36).uppercase().takeLast(6)
+        val profile = profileId.filter(Char::isLetterOrDigit).uppercase().take(4).ifBlank { "SRV" }
+        return "LN-$time-$profile"
+    }
 
     private data class PackageMetadata(
         val packageKey: String,

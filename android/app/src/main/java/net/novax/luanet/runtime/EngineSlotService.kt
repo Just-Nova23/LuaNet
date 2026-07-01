@@ -53,8 +53,9 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
         if (!running.compareAndSet(false, true)) return
         ready.set(false)
         val configuration = runCatching { Json.decodeFromString<EngineConfiguration>(configurationJson) }.getOrElse { error ->
-            onLog(3, error.message ?: error.javaClass.simpleName)
-            sendState("CRASHED")
+            val detail = "${error.javaClass.simpleName}: ${error.message ?: "Invalid engine configuration"}"
+            onLog(3, detail)
+            sendState("CRASHED", reason = "Engine configuration error", detail = detail)
             running.set(false)
             stopSelf()
             return
@@ -73,10 +74,20 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
                     }
                 }, READY_FALLBACK_MS)
                 val exitCode = native.run(Json.encodeToString(configuration))
-                sendState(if (exitCode == 0) "STOPPED" else "CRASHED")
+                if (exitCode == 0) {
+                    sendState("STOPPED")
+                } else {
+                    sendState(
+                        "CRASHED",
+                        reason = "Luanti exited with code $exitCode",
+                        detail = "Native engine returned non-zero exit code $exitCode.",
+                        exitCode = exitCode,
+                    )
+                }
             } catch (error: Throwable) {
-                onLog(3, error.message ?: error.javaClass.simpleName)
-                sendState("CRASHED")
+                val detail = "${error.javaClass.simpleName}: ${error.message ?: "Engine process failed"}"
+                onLog(3, detail)
+                sendState("CRASHED", reason = "Engine process exception", detail = detail)
             } finally {
                 running.set(false)
                 bridge = null
@@ -95,7 +106,12 @@ abstract class EngineSlotService : Service(), NativeEngineBridge.Listener {
         }
     }
 
-    private fun sendState(state: String) = send(EngineProtocol.STATE) { putString(EngineProtocol.KEY_STATE, state) }
+    private fun sendState(state: String, reason: String = "", detail: String = "", exitCode: Int? = null) = send(EngineProtocol.STATE) {
+        putString(EngineProtocol.KEY_STATE, state)
+        putString(EngineProtocol.KEY_REASON, reason)
+        putString(EngineProtocol.KEY_DETAIL, detail)
+        exitCode?.let { putInt(EngineProtocol.KEY_EXIT_CODE, it) }
+    }
     private fun send(what: Int, values: android.os.Bundle.() -> Unit) {
         callback?.let {
             EngineProtocol.send(it, what) {

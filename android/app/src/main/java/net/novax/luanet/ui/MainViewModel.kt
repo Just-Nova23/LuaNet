@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -33,7 +35,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val container = (application as LuaNetApplication).container
     private val repository = container.servers
     private val entitlementStore = EntitlementStore(application)
-    val profiles = repository.profiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val _profilesRead = MutableStateFlow(false)
+    private val _runtimeRecoveryComplete = MutableStateFlow(false)
+    val profilesLoaded: StateFlow<Boolean> = combine(_profilesRead, _runtimeRecoveryComplete) { profilesRead, recoveryComplete ->
+        profilesRead && recoveryComplete
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val profiles = repository.profiles
+        .onEach { _profilesRead.value = true }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     private val _content = MutableStateFlow(ContentBrowserState())
     val content: StateFlow<ContentBrowserState> = _content.asStateFlow()
     private val _contentDetails = MutableStateFlow<Map<String, ContentDetailState>>(emptyMap())
@@ -43,7 +52,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
-            repository.recoverAbandonedRuntimeStates(RuntimeRegistry.sessions.value.keys)
+            runCatching { repository.recoverAbandonedRuntimeStates(RuntimeRegistry.sessions.value.keys) }
+            _runtimeRecoveryComplete.value = true
         }
     }
 
@@ -78,9 +88,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun installedPackages(profileId: String) = repository.observePackages(profileId)
     fun players(profileId: String) = repository.observePlayers(profileId)
+    fun latestCrashReport(profileId: String) = repository.observeLatestCrashReport(profileId)
     fun advancedSettings(profileId: String) = repository.observeConfigSettings(profileId)
     fun modSettings(profileId: String) = repository.observeModSettings(profileId)
     fun gameSettings(profileId: String) = repository.observeGameSettings(profileId)
+
+    fun ensureEngineInstalled(engineVersion: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching { container.engineFeatures.installIfNeeded(engineVersion) })
+        }
+    }
 
     fun saveModSetting(profileId: String, key: String, value: String, onResult: (Result<String>) -> Unit) {
         viewModelScope.launch {

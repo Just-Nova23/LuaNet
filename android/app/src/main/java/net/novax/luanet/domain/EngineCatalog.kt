@@ -9,23 +9,25 @@ data class EngineRelease(
 )
 
 object EngineCatalog {
+    private const val LEGACY_ENGINE_MODULE = "engine_legacy"
+
     val releases = listOf(
-        EngineRelease("5.0.1", 37, 37, "luanet_engine_5_0_1", "engine_5_0_1"),
-        EngineRelease("5.1.1", 37, 38, "luanet_engine_5_1_1", "engine_5_1_1"),
-        EngineRelease("5.2.0", 37, 39, "luanet_engine_5_2_0", "engine_5_2_0"),
-        EngineRelease("5.3.0", 37, 39, "luanet_engine_5_3_0", "engine_5_3_0"),
-        EngineRelease("5.4.1", 37, 39, "luanet_engine_5_4_1", "engine_5_4_1"),
-        EngineRelease("5.5.1", 37, 40, "luanet_engine_5_5_1", "engine_5_5_1"),
-        EngineRelease("5.6.1", 37, 41, "luanet_engine_5_6_1", "engine_5_6_1"),
-        EngineRelease("5.7.0", 37, 42, "luanet_engine_5_7_0", "engine_5_7_0"),
-        EngineRelease("5.8.0", 37, 43, "luanet_engine_5_8_0", "engine_5_8_0"),
-        EngineRelease("5.9.1", 37, 45, "luanet_engine_5_9_1", "engine_5_9_1"),
-        EngineRelease("5.10.0", 37, 46, "luanet_engine_5_10_0", "engine_5_10_0"),
-        EngineRelease("5.11.0", 37, 47, "luanet_engine_5_11_0", "engine_5_11_0"),
-        EngineRelease("5.12.0", 37, 48, "luanet_engine_5_12_0", "engine_5_12_0"),
-        EngineRelease("5.13.0", 37, 49, "luanet_engine_5_13_0", "engine_5_13_0"),
-        EngineRelease("5.14.0", 37, 50, "luanet_engine_5_14_0", "engine_5_14_0"),
-        EngineRelease("5.15.2", 37, 51, "luanet_engine_5_15_2", "engine_5_15_2"),
+        EngineRelease("5.0.1", 37, 37, "luanet_engine_5_0_1", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.1.1", 37, 38, "luanet_engine_5_1_1", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.2.0", 37, 39, "luanet_engine_5_2_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.3.0", 37, 39, "luanet_engine_5_3_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.4.1", 37, 39, "luanet_engine_5_4_1", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.5.1", 37, 40, "luanet_engine_5_5_1", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.6.1", 37, 41, "luanet_engine_5_6_1", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.7.0", 37, 42, "luanet_engine_5_7_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.8.0", 37, 43, "luanet_engine_5_8_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.9.1", 37, 45, "luanet_engine_5_9_1", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.10.0", 37, 46, "luanet_engine_5_10_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.11.0", 37, 47, "luanet_engine_5_11_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.12.0", 37, 48, "luanet_engine_5_12_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.13.0", 37, 49, "luanet_engine_5_13_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.14.0", 37, 50, "luanet_engine_5_14_0", LEGACY_ENGINE_MODULE),
+        EngineRelease("5.15.2", 37, 51, "luanet_engine_5_15_2", LEGACY_ENGINE_MODULE),
         EngineRelease("5.16.1", 37, 52, "luanet_engine_5_16_1", null),
     )
 
