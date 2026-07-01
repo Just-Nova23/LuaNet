@@ -453,12 +453,11 @@ class ServerRepository(
             destination.parentFile?.mkdirs()
             Files.move(incoming.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE)
             if (imported.kind != ImportKind.WORLD) {
-                val type = when (imported.kind) {
-                    ImportKind.GAME -> PackageType.GAME
-                    ImportKind.MOD -> PackageType.MOD
-                    ImportKind.MODPACK -> PackageType.MODPACK
-                    else -> error("unreachable")
-                }
+	                val type = when (imported.kind) {
+	                    ImportKind.GAME -> PackageType.GAME
+	                    ImportKind.MOD -> PackageType.MOD
+	                    ImportKind.MODPACK -> PackageType.MODPACK
+	                }
                 dao.upsertPackage(InstalledPackageEntity(
                     id = UUID.randomUUID().toString(), profileId = profileId,
                     packageKey = metadata?.packageKey ?: "manual/$identifier",

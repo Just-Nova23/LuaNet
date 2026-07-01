@@ -22,34 +22,34 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 abstract class LuaNetDatabase : RoomDatabase() {
     abstract fun dao(): LuaNetDao
 
-    companion object {
-        val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN autoOffEnabled INTEGER NOT NULL DEFAULT 0")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN autoOffMinutes INTEGER NOT NULL DEFAULT 15")
-            }
-        }
+	    companion object {
+	        val MIGRATION_1_2 = object : Migration(1, 2) {
+	            override fun migrate(db: SupportSQLiteDatabase) {
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN autoOffEnabled INTEGER NOT NULL DEFAULT 0")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN autoOffMinutes INTEGER NOT NULL DEFAULT 15")
+	            }
+	        }
 
-        val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN serverDescription TEXT NOT NULL DEFAULT ''")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN motd TEXT NOT NULL DEFAULT ''")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN announceServer INTEGER NOT NULL DEFAULT 0")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN defaultPrivileges TEXT NOT NULL DEFAULT 'interact,shout'")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN disallowEmptyPassword INTEGER NOT NULL DEFAULT 1")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN enableRollback INTEGER NOT NULL DEFAULT 0")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN timeSpeed INTEGER NOT NULL DEFAULT 72")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN activeBlockRange INTEGER NOT NULL DEFAULT 3")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN maxBlockSendDistance INTEGER NOT NULL DEFAULT 10")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN maxBlockGenerateDistance INTEGER NOT NULL DEFAULT 6")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN dedicatedServerStepMs INTEGER NOT NULL DEFAULT 100")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN maxObjectsPerBlock INTEGER NOT NULL DEFAULT 64")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN itemEntityTtl INTEGER NOT NULL DEFAULT 900")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN maxPacketsPerIteration INTEGER NOT NULL DEFAULT 1024")
-                database.execSQL("ALTER TABLE server_profiles ADD COLUMN mapgenLimit INTEGER NOT NULL DEFAULT 31000")
-                database.execSQL("""
-                    CREATE TABLE IF NOT EXISTS server_players (
-                        profileId TEXT NOT NULL,
+	        val MIGRATION_2_3 = object : Migration(2, 3) {
+	            override fun migrate(db: SupportSQLiteDatabase) {
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN serverDescription TEXT NOT NULL DEFAULT ''")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN motd TEXT NOT NULL DEFAULT ''")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN announceServer INTEGER NOT NULL DEFAULT 0")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN defaultPrivileges TEXT NOT NULL DEFAULT 'interact,shout'")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN disallowEmptyPassword INTEGER NOT NULL DEFAULT 1")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN enableRollback INTEGER NOT NULL DEFAULT 0")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN timeSpeed INTEGER NOT NULL DEFAULT 72")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN activeBlockRange INTEGER NOT NULL DEFAULT 3")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN maxBlockSendDistance INTEGER NOT NULL DEFAULT 10")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN maxBlockGenerateDistance INTEGER NOT NULL DEFAULT 6")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN dedicatedServerStepMs INTEGER NOT NULL DEFAULT 100")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN maxObjectsPerBlock INTEGER NOT NULL DEFAULT 64")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN itemEntityTtl INTEGER NOT NULL DEFAULT 900")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN maxPacketsPerIteration INTEGER NOT NULL DEFAULT 1024")
+	                db.execSQL("ALTER TABLE server_profiles ADD COLUMN mapgenLimit INTEGER NOT NULL DEFAULT 31000")
+	                db.execSQL("""
+	                    CREATE TABLE IF NOT EXISTS server_players (
+	                        profileId TEXT NOT NULL,
                         name TEXT NOT NULL,
                         firstSeenAt INTEGER NOT NULL,
                         lastSeenAt INTEGER NOT NULL,
@@ -58,33 +58,33 @@ abstract class LuaNetDatabase : RoomDatabase() {
                         admin INTEGER NOT NULL,
                         PRIMARY KEY(profileId, name),
                         FOREIGN KEY(profileId) REFERENCES server_profiles(id) ON DELETE CASCADE
-                    )
-                """.trimIndent())
-                database.execSQL("CREATE INDEX IF NOT EXISTS index_server_players_profileId ON server_players(profileId)")
-                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_server_players_profileId_name ON server_players(profileId, name)")
-                database.execSQL("""
-                    CREATE TABLE IF NOT EXISTS server_config_settings (
-                        profileId TEXT NOT NULL,
+	                    )
+	                """.trimIndent())
+	                db.execSQL("CREATE INDEX IF NOT EXISTS index_server_players_profileId ON server_players(profileId)")
+	                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_server_players_profileId_name ON server_players(profileId, name)")
+	                db.execSQL("""
+	                    CREATE TABLE IF NOT EXISTS server_config_settings (
+	                        profileId TEXT NOT NULL,
                         `key` TEXT NOT NULL,
                         value TEXT NOT NULL,
                         updatedAt INTEGER NOT NULL,
                         PRIMARY KEY(profileId, `key`),
                         FOREIGN KEY(profileId) REFERENCES server_profiles(id) ON DELETE CASCADE
-                    )
-                """.trimIndent())
-                database.execSQL("CREATE INDEX IF NOT EXISTS index_server_config_settings_profileId ON server_config_settings(profileId)")
-            }
-        }
+	                    )
+	                """.trimIndent())
+	                db.execSQL("CREATE INDEX IF NOT EXISTS index_server_config_settings_profileId ON server_config_settings(profileId)")
+	            }
+	        }
 
-        val MIGRATION_3_4 = object : Migration(3, 4) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL("ALTER TABLE server_players ADD COLUMN privileges TEXT NOT NULL DEFAULT ''")
-            }
-        }
+	        val MIGRATION_3_4 = object : Migration(3, 4) {
+	            override fun migrate(db: SupportSQLiteDatabase) {
+	                db.execSQL("ALTER TABLE server_players ADD COLUMN privileges TEXT NOT NULL DEFAULT ''")
+	            }
+	        }
 
-        val MIGRATION_4_5 = object : Migration(4, 5) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL("""
+	        val MIGRATION_4_5 = object : Migration(4, 5) {
+	            override fun migrate(db: SupportSQLiteDatabase) {
+	                db.execSQL("""
                     CREATE TABLE IF NOT EXISTS server_crash_reports (
                         id TEXT NOT NULL PRIMARY KEY,
                         profileId TEXT NOT NULL,
@@ -96,8 +96,8 @@ abstract class LuaNetDatabase : RoomDatabase() {
                         FOREIGN KEY(profileId) REFERENCES server_profiles(id) ON DELETE CASCADE
                     )
                 """.trimIndent())
-                database.execSQL("CREATE INDEX IF NOT EXISTS index_server_crash_reports_profileId ON server_crash_reports(profileId)")
-                database.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_server_crash_reports_profileId_code ON server_crash_reports(profileId, code)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_server_crash_reports_profileId ON server_crash_reports(profileId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_server_crash_reports_profileId_code ON server_crash_reports(profileId, code)")
             }
         }
     }

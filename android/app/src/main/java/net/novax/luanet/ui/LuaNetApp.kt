@@ -18,11 +18,20 @@ import android.widget.TextView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
@@ -76,6 +85,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Close as Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.AssistChip
@@ -111,9 +121,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
@@ -235,7 +247,6 @@ fun LuaNetApp(viewModel: MainViewModel) {
             onCreateEmailAccount = viewModel::createEmailAccount,
             onGoogleSignIn = viewModel::signInWithGoogle,
             onGitHubSignIn = viewModel::signInWithGitHub,
-            onSendVerificationEmail = viewModel::sendVerificationEmail,
             onSignOut = viewModel::signOut,
             onDeleteAccount = viewModel::deleteAccount,
         )
@@ -539,12 +550,12 @@ private fun ServerList(
                         Text("$activeCount active · ${profiles.size} saved", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                items(profiles, key = { it.id }) { profile ->
-                    Card(
-                        onClick = { onOpen(profile.id) },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-                    ) {
+	                items(profiles, key = { it.id }) { profile ->
+	                    Card(
+	                        onClick = { onOpen(profile.id) },
+	                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).animateContentSize(),
+	                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+	                    ) {
                         Row(Modifier.padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
                             Box(Modifier.size(12.dp).background(stateColor(profile.state), CircleShape))
                             Spacer(Modifier.width(14.dp))
@@ -576,7 +587,6 @@ private fun AccountScreen(
     onCreateEmailAccount: (String, String, (Result<String>) -> Unit) -> Unit,
     onGoogleSignIn: (Activity, (Result<String>) -> Unit) -> Unit,
     onGitHubSignIn: (Activity, (Result<String>) -> Unit) -> Unit,
-    onSendVerificationEmail: ((Result<String>) -> Unit) -> Unit,
     onSignOut: () -> Unit,
     onDeleteAccount: ((Result<String>) -> Unit) -> Unit,
 ) {
@@ -698,42 +708,32 @@ private fun AccountScreen(
             } else {
                 item { AccountHeroCard(account) }
                 item {
-                    Card {
-                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Account menu", style = MaterialTheme.typography.titleLarge)
-                            FilledTonalButton(
+                    Card(modifier = Modifier.animateContentSize()) {
+                        Column(Modifier.fillMaxWidth()) {
+                            AccountMenuRow(
+                                icon = Icons.Default.Paid,
+                                title = "Subscription",
+                                detail = "Premium and billing",
                                 onClick = onOpenPremium,
-                                modifier = Modifier.fillMaxWidth().height(52.dp),
-                            ) {
-                                Icon(Icons.Default.Paid, null)
-                                Spacer(Modifier.width(8.dp))
-                                Text("Subscription")
-                            }
-                            if (!account.emailVerified) {
-                                Text("Email verification required", color = MaterialTheme.colorScheme.error)
-                            }
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                FilledTonalButton(
-                                    onClick = {
-                                        onSendVerificationEmail { result ->
-                                            message = result.fold({ it }, { it.message ?: "Verification failed" })
-                                        }
-                                    },
-                                    enabled = !account.emailVerified,
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Verify email") }
-                                FilledTonalButton(
-                                    onClick = {
-                                        onSignOut()
-                                        message = "Signed out"
-                                    },
-                                    modifier = Modifier.weight(1f),
-                                ) { Text("Sign out") }
-                            }
-                            TextButton(
+                            )
+                            HorizontalDivider(Modifier.padding(start = 68.dp))
+                            AccountMenuRow(
+                                icon = Icons.AutoMirrored.Filled.ArrowForward,
+                                title = "Sign out",
+                                detail = account.email ?: account.displayName ?: "",
+                                onClick = {
+                                    onSignOut()
+                                    message = "Signed out"
+                                },
+                            )
+                            HorizontalDivider(Modifier.padding(start = 68.dp))
+                            AccountMenuRow(
+                                icon = Icons.Default.Stop,
+                                title = "Delete account",
+                                detail = "Remove account data",
+                                destructive = true,
                                 onClick = { confirmDelete = true },
-                                modifier = Modifier.fillMaxWidth(),
-                            ) { Text("Delete account") }
+                            )
                         }
                     }
                 }
@@ -774,14 +774,16 @@ private fun PremiumScreen(
     onSyncEntitlement: ((Result<String>) -> Unit) -> Unit,
     onPurchasePremium: (Activity, Boolean, (Result<String>) -> Unit) -> Unit,
     onRestorePremium: ((Result<String>) -> Unit) -> Unit,
-) {
-    val context = LocalContext.current
-    val activity = context.findActivity()
-    var message by remember { mutableStateOf<String?>(null) }
-    val signedIn = account.signedIn && account.tokenConfigured
-    val messageIsError = message?.let {
-        it.contains("failed", ignoreCase = true) ||
-            it.contains("sign in", ignoreCase = true) ||
+	) {
+	    val context = LocalContext.current
+	    val activity = context.findActivity()
+	    var message by remember { mutableStateOf<String?>(null) }
+	    val signedIn = account.signedIn && account.tokenConfigured
+	    val premiumYellow = Color(0xFFFFCF33)
+	    val premiumInk = Color(0xFF221A00)
+	    val messageIsError = message?.let {
+	        it.contains("failed", ignoreCase = true) ||
+	            it.contains("sign in", ignoreCase = true) ||
             it.contains("not configured", ignoreCase = true)
     } == true
     fun purchase(yearly: Boolean) {
@@ -813,123 +815,154 @@ private fun PremiumScreen(
         return
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Premium") },
-                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-            )
-        },
-    ) { padding ->
-        LazyColumn(
-            Modifier.fillMaxSize().padding(padding).padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
-        ) {
-            item {
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                    Column(Modifier.fillMaxWidth().padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Surface(shape = CircleShape, color = MaterialTheme.colorScheme.surface) {
-                                Icon(Icons.Default.Paid, null, Modifier.padding(10.dp).size(28.dp), tint = MaterialTheme.colorScheme.primary)
-                            }
-                            Spacer(Modifier.width(12.dp))
-	                            Column(Modifier.weight(1f)) {
-	                                Text("LuaNet Premium", style = MaterialTheme.typography.headlineSmall)
-	                                Text(
-	                                    if (account.tier.name == "PREMIUM") "Active on this account" else "Upgrade when public hosting needs to stay online",
-	                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-	                                )
-	                            }
-                        }
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            AccountStatusPill("Current tier", account.tier.name.lowercase().replaceFirstChar(Char::uppercase), Modifier.weight(1f))
-                            AccountStatusPill("Account", if (signedIn) "Signed in" else "Required", Modifier.weight(1f), error = !signedIn)
-                        }
-                        account.expiresAt?.let {
-                            Text("Expires: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                        }
-                    }
-                }
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    PremiumPlanCard(
-                        title = "Monthly",
-                        price = "€1.99",
-                        subtitle = "per month",
-                        modifier = Modifier.weight(1f),
-                        onClick = { purchase(false) },
-                        enabled = signedIn,
-                    )
-                    PremiumPlanCard(
-                        title = "Yearly",
-                        price = "€19.10",
-                        subtitle = "per year",
-                        modifier = Modifier.weight(1f),
-                        onClick = { purchase(true) },
-                        enabled = signedIn,
-                    )
-                }
-            }
-            item {
-                Card {
-	                    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-	                        Text("Included", style = MaterialTheme.typography.titleLarge)
-	                        FeatureLine(Icons.Default.Cloud, "Five active external links", "Shared across devices")
-	                        HorizontalDivider()
-	                        FeatureLine(Icons.Default.CheckCircle, "No start ad", "Ads stay on Free external links")
-	                        HorizontalDivider()
-                        FeatureLine(Icons.Default.Public, "No four-hour limit", "Links renew while Premium is active")
-                    }
-                }
-            }
-            item {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilledTonalButton(
-                        onClick = { onRestorePremium { result -> message = result.fold({ it }, { it.message ?: "Restore failed" }) } },
-                        enabled = signedIn,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Restore") }
-                    FilledTonalButton(
-                        onClick = { onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) } },
-                        enabled = signedIn,
-                        modifier = Modifier.weight(1f),
-                    ) { Text("Sync") }
-                }
-            }
-	            message?.let {
+	    Scaffold(
+	        topBar = {
+	            TopAppBar(
+	                title = { Text("Premium") },
+	                navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
+	            )
+	        },
+	    ) { padding ->
+	        Box(Modifier.fillMaxSize().padding(padding)) {
+	            PremiumBackground(Modifier.fillMaxSize())
+	            LazyColumn(
+	                Modifier.fillMaxSize().padding(20.dp),
+	                verticalArrangement = Arrangement.spacedBy(14.dp),
+	            ) {
 	                item {
-                    Text(
-                        it,
-                        color = if (messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    )
-                }
+	                    Card(
+	                        modifier = Modifier.fillMaxWidth().animateContentSize(),
+	                        colors = CardDefaults.cardColors(containerColor = premiumYellow),
+	                    ) {
+	                        Column(Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+	                            Row(verticalAlignment = Alignment.CenterVertically) {
+	                                Surface(shape = CircleShape, color = premiumInk) {
+	                                    Icon(Icons.Default.Paid, null, Modifier.padding(12.dp).size(28.dp), tint = premiumYellow)
+	                                }
+	                                Spacer(Modifier.width(12.dp))
+	                                Column(Modifier.weight(1f)) {
+	                                    Text("LuaNet Premium", style = MaterialTheme.typography.headlineSmall, color = premiumInk)
+	                                    Text("More external links, no ads, no four-hour limit.", color = premiumInk.copy(alpha = 0.72f))
+	                                }
+	                            }
+	                            Button(
+	                                onClick = { purchase(false) },
+	                                modifier = Modifier.fillMaxWidth().height(58.dp),
+	                                colors = ButtonDefaults.buttonColors(containerColor = premiumInk, contentColor = premiumYellow),
+	                            ) {
+	                                Icon(Icons.Default.Paid, null)
+	                                Spacer(Modifier.width(8.dp))
+	                                Text("Get Premium · €1.99/month")
+	                            }
+	                            FilledTonalButton(
+	                                onClick = { purchase(true) },
+	                                modifier = Modifier.fillMaxWidth().height(52.dp),
+	                                colors = ButtonDefaults.filledTonalButtonColors(containerColor = Color.White.copy(alpha = 0.62f), contentColor = premiumInk),
+	                            ) {
+	                                Text("Yearly · €19.10")
+	                            }
+	                        }
+	                    }
+	                }
+	                item { PremiumComparisonCard() }
+	                item {
+	                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+	                        FilledTonalButton(
+	                            onClick = { onRestorePremium { result -> message = result.fold({ it }, { it.message ?: "Restore failed" }) } },
+	                            modifier = Modifier.weight(1f),
+	                        ) { Text("Restore") }
+	                        FilledTonalButton(
+	                            onClick = { onSyncEntitlement { result -> message = result.fold({ it }, { it.message ?: "Entitlement sync failed" }) } },
+	                            modifier = Modifier.weight(1f),
+	                        ) { Text("Sync") }
+	                    }
+	                }
+	                message?.let {
+	                    item {
+	                        Text(
+	                            it,
+	                            color = if (messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+	                        )
+	                    }
+	                }
+	            }
+	        }
+	    }
+	}
+
+@Composable
+private fun PremiumBackground(modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val yellow = Color(0xFFFFC400)
+        repeat(7) { index ->
+            val y = size.height * (0.10f + index * 0.14f)
+            val offset = if (index % 2 == 0) 40f else -70f
+            val path = Path().apply {
+                moveTo(-size.width * 0.12f, y)
+                cubicTo(
+                    size.width * 0.22f,
+                    y - 58f + offset,
+                    size.width * 0.55f,
+                    y + 52f - offset,
+                    size.width * 1.12f,
+                    y - 18f,
+                )
             }
+            drawPath(
+                path = path,
+                color = yellow.copy(alpha = 0.10f),
+                style = Stroke(width = 2.dp.toPx()),
+            )
         }
     }
 }
 
 @Composable
-private fun PremiumPlanCard(
-    title: String,
-    price: String,
-    subtitle: String,
-    modifier: Modifier,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
+private fun PremiumComparisonCard() {
     Card(
-        onClick = onClick,
-        enabled = enabled,
-        modifier = modifier,
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(price, style = MaterialTheme.typography.headlineMedium)
-            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Feature", modifier = Modifier.weight(1.55f), style = MaterialTheme.typography.titleMedium)
+                Text("Free", modifier = Modifier.weight(0.72f), style = MaterialTheme.typography.labelLarge)
+                Text("Premium", modifier = Modifier.weight(0.9f), style = MaterialTheme.typography.labelLarge)
+            }
+            HorizontalDivider()
+            PremiumComparisonRow("LAN hosting", free = true, premium = true)
+            PremiumComparisonRow("ContentDB installs", free = true, premium = true)
+            PremiumComparisonRow("Backups", free = true, premium = true)
+            PremiumComparisonRow("ZIP import", free = true, premium = true)
+            PremiumComparisonRow("External link", free = true, premium = true)
+            PremiumComparisonRow("No start ad", free = false, premium = true)
+            PremiumComparisonRow("Five active external links", free = false, premium = true)
+            PremiumComparisonRow("No four-hour limit", free = false, premium = true)
         }
     }
+}
+
+@Composable
+private fun PremiumComparisonRow(title: String, free: Boolean, premium: Boolean) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, modifier = Modifier.weight(1.55f), style = MaterialTheme.typography.bodyMedium)
+        PlanMark(free, Modifier.weight(0.72f))
+        PlanMark(premium, Modifier.weight(0.9f))
+    }
+}
+
+@Composable
+private fun PlanMark(included: Boolean, modifier: Modifier = Modifier) {
+    val color = if (included) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    Icon(
+        imageVector = if (included) Icons.Default.CheckCircle else Icons.Default.Stop,
+        contentDescription = if (included) "Included" else "Not included",
+        modifier = modifier.size(20.dp),
+        tint = color,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -1062,61 +1095,70 @@ private fun CreditLinkCard(
 
 @Composable
 private fun AccountHeroCard(account: AccountState) {
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
-        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Card(
+        modifier = Modifier.animateContentSize(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-                    AccountAvatar(account.photoUrl, Modifier.padding(10.dp).size(26.dp))
-                }
+                AccountAvatar(account.photoUrl, Modifier.size(58.dp))
                 Spacer(Modifier.width(12.dp))
-	                Column(Modifier.weight(1f)) {
-	                    Text(
-	                        account.email ?: account.displayName ?: "Signed in",
-	                        style = MaterialTheme.typography.titleLarge,
-	                    )
-	                }
-	            }
-            HorizontalDivider()
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                AccountStatusPill(
-                    label = "Tier",
-                    value = account.tier.name.lowercase().replaceFirstChar(Char::uppercase),
-                    modifier = Modifier.weight(1f),
-                )
-	                AccountStatusPill(
-	                    label = "Verification",
-	                    value = if (account.emailVerified) "Verified" else "Pending",
-	                    modifier = Modifier.weight(1f),
-	                    error = !account.emailVerified,
-	                )
-	            }
-	            account.expiresAt?.let {
-	                Text("Premium expires: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-	            }
-	        }
-	    }
-	}
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        account.email ?: account.displayName ?: "Signed in",
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    TierChip(account.tier.name.lowercase().replaceFirstChar(Char::uppercase))
+                }
+            }
+            account.expiresAt?.let {
+                Text("Premium expires: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
+}
 
 @Composable
-private fun AccountStatusPill(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier,
-    error: Boolean = false,
-) {
+private fun TierChip(value: String) {
     Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(18.dp),
-        color = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(100.dp),
+        color = MaterialTheme.colorScheme.surface,
     ) {
-        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(
-                value,
-                style = MaterialTheme.typography.titleMedium,
-                color = if (error) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
-            )
+        Text(
+            value,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun AccountMenuRow(
+    icon: ImageVector,
+    title: String,
+    detail: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 15.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+        Icon(icon, null, Modifier.size(24.dp), tint = color)
+        Spacer(Modifier.width(28.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium, color = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+            if (detail.isNotBlank()) {
+                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
+        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -1370,46 +1412,48 @@ private fun Dashboard(
                     )
                 }
                 item { Spacer(Modifier.width(10.dp)) }
-            }
-            HorizontalDivider()
-            when (tabs[selectedTab].key) {
-                DashboardTabKey.OVERVIEW -> Overview(
-                    profile = profile,
-                    runtime = runtime,
-                    crashReport = crashReport,
-                    localPort = runtime?.localPort ?: profile.localPort?.takeUnless {
-                        runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
-                    },
-	                    context = context,
-	                    onOpenContentLibrary = onOpenContentLibrary,
-	                    onEnsureEngineInstalled = onEnsureEngineInstalled,
-	                    onStartPublicTunnel = onStartPublicTunnel,
-	                    onStopPublicTunnel = onStopPublicTunnel,
-                )
-                DashboardTabKey.CONSOLE -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
-                    OrchestratorService.command(context, profile.id, command)
-                }
-                DashboardTabKey.PLAYERS -> PlayersPanel(
-                    players = players,
-                    runtimePlayers = runtime?.players.orEmpty(),
-                    onOpenPlayer = onOpenPlayer,
-                )
-                DashboardTabKey.CONTENT -> ContentSummaryPanel(
-                    profile = profile,
-                    installedPackages = installedPackages,
-                    hasGameSettings = hasGameSettings,
-                    hasModSettings = hasModSettings,
-                    onOpenContentLibrary = onOpenContentLibrary,
-                    onOpenZipImport = onOpenZipImport,
-                    onOpenGameSettings = onOpenGameSettings,
-                    onOpenModSettings = onOpenModSettings,
-                )
-	                DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onOpenAdvancedSettings, onOpenContentLibrary, onSaveServerSettings)
-                DashboardTabKey.BACKUPS -> BackupPanel(profile, backups, onCreateBackup, onRestoreBackup, onDeleteBackup)
-            }
-        }
-    }
-}
+	            }
+	            HorizontalDivider()
+	            Crossfade(targetState = tabs[selectedTab].key, label = "dashboard-tab") { tabKey ->
+	                when (tabKey) {
+	                    DashboardTabKey.OVERVIEW -> Overview(
+	                        profile = profile,
+	                        runtime = runtime,
+	                        crashReport = crashReport,
+	                        localPort = runtime?.localPort ?: profile.localPort?.takeUnless {
+	                            runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
+	                        },
+	                        context = context,
+	                        onOpenContentLibrary = onOpenContentLibrary,
+	                        onEnsureEngineInstalled = onEnsureEngineInstalled,
+	                        onStartPublicTunnel = onStartPublicTunnel,
+	                        onStopPublicTunnel = onStopPublicTunnel,
+	                    )
+	                    DashboardTabKey.CONSOLE -> ConsolePanel(profile.id, runtime?.logs.orEmpty(), running) { command ->
+	                        OrchestratorService.command(context, profile.id, command)
+	                    }
+	                    DashboardTabKey.PLAYERS -> PlayersPanel(
+	                        players = players,
+	                        runtimePlayers = runtime?.players.orEmpty(),
+	                        onOpenPlayer = onOpenPlayer,
+	                    )
+	                    DashboardTabKey.CONTENT -> ContentSummaryPanel(
+	                        profile = profile,
+	                        installedPackages = installedPackages,
+	                        hasGameSettings = hasGameSettings,
+	                        hasModSettings = hasModSettings,
+	                        onOpenContentLibrary = onOpenContentLibrary,
+	                        onOpenZipImport = onOpenZipImport,
+	                        onOpenGameSettings = onOpenGameSettings,
+	                        onOpenModSettings = onOpenModSettings,
+	                    )
+	                    DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onOpenAdvancedSettings, onOpenContentLibrary, onSaveServerSettings)
+	                    DashboardTabKey.BACKUPS -> BackupPanel(profile, backups, onCreateBackup, onRestoreBackup, onDeleteBackup)
+	                }
+	            }
+	        }
+	    }
+	}
 
 private enum class DashboardTabKey { OVERVIEW, CONSOLE, PLAYERS, CONTENT, SETTINGS, BACKUPS }
 private data class DashboardTab(val key: DashboardTabKey, val label: String, val icon: ImageVector)
@@ -2036,12 +2080,12 @@ private fun ContentPackageCard(
     onOpen: () -> Unit,
     onInstall: () -> Unit,
 ) {
-    if (compact) {
-        Card(
-            onClick = onOpen,
-            modifier = Modifier.width(260.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        ) {
+	    if (compact) {
+	        Card(
+	            onClick = onOpen,
+	            modifier = Modifier.width(260.dp).animateContentSize(),
+	            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+	        ) {
             Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ContentThumbnail(item.thumbnail, Modifier.fillMaxWidth().aspectRatio(16f / 9f))
                 Text(item.title.ifBlank { item.name }, style = MaterialTheme.typography.titleMedium, maxLines = 2)
@@ -2049,11 +2093,12 @@ private fun ContentPackageCard(
                 PackageBadgeRow(item = item, installed = installed, maxBadges = 2)
             }
         }
-    } else {
-        Card(
-            onClick = onOpen,
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        ) {
+	    } else {
+	        Card(
+	            onClick = onOpen,
+	            modifier = Modifier.animateContentSize(),
+	            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+	        ) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.Top) {
                     ContentThumbnail(item.thumbnail, Modifier.size(96.dp))
@@ -2442,7 +2487,10 @@ private fun ZipImportScreen(
 private fun ContentOperationCard(operation: ContentOperationState) {
     val total = operation.totalBytes
     val determinate = !operation.indeterminate && total != null && total > 0
-    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+	    Card(
+	        modifier = Modifier.animateContentSize(),
+	        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+	    ) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(operation.title, style = MaterialTheme.typography.titleMedium)
             Text(operation.phase, color = MaterialTheme.colorScheme.onPrimaryContainer)
@@ -2515,22 +2563,36 @@ private fun BackupPanel(
     var message by remember { mutableStateOf<String?>(null) }
     var restoreTarget by remember { mutableStateOf<BackupEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<BackupEntity?>(null) }
-    val canChange = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
-    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Text("Backups", style = MaterialTheme.typography.headlineSmall) }
-        item {
-            Button(
-                onClick = { onCreate(profile.id) { result -> message = result.fold({ it }, { it.message ?: "Backup failed" }) } },
-                enabled = canChange,
-                modifier = Modifier.fillMaxWidth(),
-            ) { Text("Create manual backup") }
-        }
-        message?.let { item { Text(it) } }
-        if (backups.isEmpty()) {
-            item { EmptySection(Icons.Default.Backup, "No backups yet", "Create one before changing engines, games or mods.") }
-        } else {
-            items(backups, key = { it.id }) { backup ->
-                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+	    val canChange = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
+	    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+	        item {
+	            Button(
+	                onClick = { onCreate(profile.id) { result -> message = result.fold({ it }, { it.message ?: "Backup failed" }) } },
+	                enabled = canChange,
+	                modifier = Modifier.fillMaxWidth().height(56.dp),
+	            ) {
+	                Icon(Icons.Default.Backup, null)
+	                Spacer(Modifier.width(8.dp))
+	                Text("Create backup")
+	            }
+	        }
+	        item {
+	            AnimatedVisibility(
+	                visible = message != null,
+	                enter = fadeIn() + expandVertically(),
+	                exit = fadeOut() + shrinkVertically(),
+	            ) {
+	                Text(message.orEmpty())
+	            }
+	        }
+	        if (backups.isEmpty()) {
+	            item { EmptySection(Icons.Default.Backup, "No backups yet", "") }
+	        } else {
+	            items(backups, key = { it.id }) { backup ->
+	                Card(
+	                    modifier = Modifier.animateContentSize(),
+	                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+	                ) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Default.Backup, null, tint = MaterialTheme.colorScheme.primary)
@@ -3223,6 +3285,18 @@ private fun Overview(
 	    var publicMessage by remember(profile.id) { mutableStateOf<String?>(null) }
 	    var startMessage by remember(profile.id) { mutableStateOf<String?>(null) }
 	    var preparingStart by remember(profile.id) { mutableStateOf(false) }
+	    val runtimeState = runtime?.state
+	    val staleActiveState = runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
+	    val running = runtimeState in setOf("STARTING", "RUNNING", "STOPPING")
+	    val state = runtimeState ?: if (staleActiveState) "STOPPED" else profile.state.name
+	    val displayProfileState = if (staleActiveState) ServerState.STOPPED else profile.state
+	    val publicHost = runtime?.publicHost ?: profile.publicHost
+	    val publicPort = runtime?.publicPort ?: profile.publicPort
+	    val publicEnabled = !staleActiveState && publicHost != null && publicPort != null && (runtime?.publicPort != null || profile.publicEnabled)
+	    val animatedStateColor by animateColorAsState(
+	        targetValue = if (running) MaterialTheme.colorScheme.primary else stateColor(displayProfileState),
+	        label = "server-state-color",
+	    )
 	    fun requestPublicStart() {
 	        val activity = context.findActivity()
 	        if (activity == null) {
@@ -3234,20 +3308,15 @@ private fun Overview(
 	        }
 	    }
 	    LazyColumn(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        val runtimeState = runtime?.state
-        val staleActiveState = runtime == null && profile.state in setOf(ServerState.STARTING, ServerState.RUNNING, ServerState.STOPPING)
-        val running = runtimeState in setOf("STARTING", "RUNNING", "STOPPING")
-        val state = runtimeState ?: if (staleActiveState) "STOPPED" else profile.state.name
-        val displayProfileState = if (staleActiveState) ServerState.STOPPED else profile.state
-        val publicHost = runtime?.publicHost ?: profile.publicHost
-        val publicPort = runtime?.publicPort ?: profile.publicPort
-        val publicEnabled = !staleActiveState && publicHost != null && publicPort != null && (runtime?.publicPort != null || profile.publicEnabled)
-        item { Spacer(Modifier.height(4.dp)) }
-        item {
-            Card(colors = CardDefaults.cardColors(containerColor = if (running) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant)) {
-                Column(Modifier.padding(20.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(12.dp).background(if (running) MaterialTheme.colorScheme.primary else stateColor(displayProfileState), CircleShape))
+	        item { Spacer(Modifier.height(4.dp)) }
+	        item {
+	            Card(
+	                modifier = Modifier.animateContentSize(),
+	                colors = CardDefaults.cardColors(containerColor = if (running) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant),
+	            ) {
+	                Column(Modifier.padding(20.dp)) {
+	                    Row(verticalAlignment = Alignment.CenterVertically) {
+	                        Box(Modifier.size(12.dp).background(animatedStateColor, CircleShape))
                         Spacer(Modifier.width(10.dp)); Text(serverStateLabel(state), style = MaterialTheme.typography.titleMedium)
                         Spacer(Modifier.weight(1f)); Text("${profile.maxPlayers} slots", style = MaterialTheme.typography.labelLarge)
                     }
