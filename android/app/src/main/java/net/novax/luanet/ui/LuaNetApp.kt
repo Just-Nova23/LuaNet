@@ -1916,7 +1916,6 @@ private fun ContentPanel(
     onLoadDetail: (String) -> Unit,
     onInstall: (String, ContentPackage, (Result<String>) -> Unit) -> Unit,
 ) {
-    var type by remember(profile.id) { mutableStateOf("game") }
     var query by remember(profile.id) { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
     var pendingInstall by remember { mutableStateOf<ContentPackage?>(null) }
@@ -1927,7 +1926,7 @@ private fun ContentPanel(
 
     LaunchedEffect(profile.id) {
         if (state.profileId != profile.id && !state.loading) {
-            onSearch(profile.id, type, "")
+            onSearch(profile.id, "all", "")
         }
     }
 
@@ -1947,17 +1946,9 @@ private fun ContentPanel(
         item { Text("Browse featured games and mods, search the full catalog, then tap a package for screenshots, details and install.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         item { InstalledContentSummary(installedPackages) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf("game" to "Games", "mod" to "Mods & modpacks").forEach { (value, label) ->
-                    AssistChip(onClick = { type = value }, label = { Text(label) },
-                        colors = if (type == value) AssistChipDefaults.assistChipColors(containerColor = MaterialTheme.colorScheme.primaryContainer) else AssistChipDefaults.assistChipColors())
-                }
-            }
-        }
-        item {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(query, { query = it.take(80) }, label = { Text("Search ContentDB") }, singleLine = true, modifier = Modifier.weight(1f))
-                FilledTonalButton(onClick = { onSearch(profile.id, type, query) }, enabled = !state.loading && !operationBusy) { Text("Search") }
+                FilledTonalButton(onClick = { onSearch(profile.id, "all", query) }, enabled = !state.loading && !operationBusy) { Text("Search") }
             }
         }
         operation?.let { item { ContentOperationCard(it) } }
@@ -1968,12 +1959,14 @@ private fun ContentPanel(
             item { Text("Loading featured ContentDB sections. Use Search if you want a specific package.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
 
-        if (state.profileId == profile.id && state.query.isBlank()) {
+        if (state.profileId == profile.id && state.sections.isNotEmpty()) {
             state.sections.forEach { section ->
                 item(key = section.title) {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(section.title, style = MaterialTheme.typography.titleLarge)
-                        Text(section.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (section.subtitle.isNotBlank()) {
+                            Text(section.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             items(section.items, key = { it.key }) { item ->
                                 ContentPackageCard(
@@ -1993,19 +1986,8 @@ private fun ContentPanel(
         }
 
         if (state.profileId == profile.id && state.query.isNotBlank()) {
-            if (!state.loading && state.items.isEmpty() && state.error == null) {
+            if (!state.loading && state.sections.isEmpty() && state.error == null) {
                 item { Text("No packages found for “${state.query}”.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            }
-            items(state.items, key = { it.key }) { item ->
-                ContentPackageCard(
-                    item = item,
-                    installed = item.key in installedKeys,
-                    packageBusy = operation?.packageKey == item.key,
-                    installEnabled = !operationBusy && profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
-                    compact = false,
-                    onOpen = { selectedPackage = item },
-                    onInstall = { requestInstall(item) },
-                )
             }
         }
         message?.let { item { Text(it) } }

@@ -87,6 +87,26 @@ class ContentDbClient(
         return queryPackages(apiType, query, "score", "desc", 100, engineVersion, game)
     }
 
+    suspend fun searchAll(query: String, engineVersion: String, game: String? = null): List<ContentHomeSection> = coroutineScope {
+        val clean = query.trim()
+        listOf(
+            async {
+                ContentHomeSection(
+                    title = "Games",
+                    subtitle = "",
+                    items = queryPackages("game", clean, "score", "desc", SEARCH_SECTION_LIMIT, engineVersion, null),
+                )
+            },
+            async {
+                ContentHomeSection(
+                    title = "Mods & modpacks",
+                    subtitle = "",
+                    items = queryPackages("mod", clean, "score", "desc", SEARCH_SECTION_LIMIT, engineVersion, game),
+                )
+            },
+        ).awaitAll().filter { it.items.isNotEmpty() }
+    }
+
     suspend fun home(engineVersion: String, game: String? = null): List<ContentHomeSection> = coroutineScope {
         listOf(
             async {
@@ -248,5 +268,6 @@ class ContentDbClient(
         private const val MAX_DOWNLOAD_BYTES = 512L * 1024 * 1024
         private const val MAX_BADGED_RESULTS = 40
         private const val HOME_SECTION_LIMIT = 20
+        private const val SEARCH_SECTION_LIMIT = 60
     }
 }

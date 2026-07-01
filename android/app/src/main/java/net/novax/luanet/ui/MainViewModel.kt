@@ -358,15 +358,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
         viewModelScope.launch {
             _content.value = runCatching {
-                ContentBrowserState(profileId, type, query,
-                    items = container.contentDb.search(type, query, profile.engineVersion, profile.gameKey),
+                ContentBrowserState(profileId, "all", query,
+                    sections = container.contentDb.searchAll(query, profile.engineVersion, profile.gameKey),
                     loading = false,
                     operation = _content.value.operation,
                 )
             }.getOrElse {
                 ContentBrowserState(
                     profileId = profileId,
-                    type = type,
+                    type = "all",
                     query = query,
                     error = it.message ?: "ContentDB request failed",
                     operation = _content.value.operation,
