@@ -19,6 +19,7 @@ data class AccountSession(
     val uid: String? = null,
     val email: String? = null,
     val displayName: String? = null,
+    val photoUrl: String? = null,
     val emailVerified: Boolean = false,
 )
 
@@ -38,6 +39,7 @@ class AccountGateway(private val context: Context) {
             uid = user.uid,
             email = user.email,
             displayName = user.displayName,
+            photoUrl = user.photoUrl?.toString(),
             emailVerified = user.isEmailVerified || user.hasTrustedOAuthProvider(),
         )
     }

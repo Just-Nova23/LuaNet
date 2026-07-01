@@ -15,6 +15,7 @@ import android.provider.Settings
 import android.text.method.LinkMovementMethod
 import android.util.TypedValue
 import android.widget.TextView
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -125,6 +126,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import io.noties.markwon.Markwon
+import net.novax.luanet.data.db.BackupEntity
 import net.novax.luanet.data.db.ServerCrashReportEntity
 import net.novax.luanet.data.db.ServerProfileEntity
 import net.novax.luanet.data.db.InstalledPackageEntity
@@ -171,6 +173,27 @@ fun LuaNetApp(viewModel: MainViewModel) {
     val contentDetails by viewModel.contentDetails.collectAsStateWithLifecycle()
     val account by viewModel.account.collectAsStateWithLifecycle()
     var destination: Destination by remember { mutableStateOf(Destination.Servers) }
+    var backStack: List<Destination> by remember { mutableStateOf(emptyList()) }
+    fun navigate(next: Destination) {
+        if (destination != next) {
+            backStack = backStack + destination
+            destination = next
+        }
+    }
+    fun replaceWith(next: Destination) {
+        backStack = emptyList()
+        destination = next
+    }
+    fun goBack() {
+        val previous = backStack.lastOrNull()
+        if (previous == null) {
+            replaceWith(Destination.Servers)
+        } else {
+            backStack = backStack.dropLast(1)
+            destination = previous
+        }
+    }
+    BackHandler(destination != Destination.Servers) { goBack() }
     if (!profilesLoaded) {
         StartupLoadingScreen()
         return
@@ -178,15 +201,17 @@ fun LuaNetApp(viewModel: MainViewModel) {
     when (val current = destination) {
         Destination.Servers -> ServerList(
             profiles = profiles,
-            onCreate = { destination = Destination.Create },
-            onOpen = { destination = Destination.Dashboard(it) },
-            onOpenAccount = { destination = Destination.Account },
-            onOpenPremium = { destination = Destination.Premium },
-            onOpenCredits = { destination = Destination.Credits },
+            account = account,
+            onCreate = { navigate(Destination.Create) },
+            onOpen = { navigate(Destination.Dashboard(it)) },
+            onOpenAccount = { navigate(Destination.Account) },
+            onOpenPremium = { navigate(Destination.Premium) },
+            onOpenCredits = { navigate(Destination.Credits) },
         )
         Destination.Account -> AccountScreen(
             account = account,
-            onBack = { destination = Destination.Servers },
+            onBack = { goBack() },
+            onOpenPremium = { navigate(Destination.Premium) },
             onSignInEmail = viewModel::signInWithEmail,
             onCreateEmailAccount = viewModel::createEmailAccount,
             onGoogleSignIn = viewModel::signInWithGoogle,
@@ -197,18 +222,19 @@ fun LuaNetApp(viewModel: MainViewModel) {
         )
         Destination.Premium -> PremiumScreen(
             account = account,
-            onBack = { destination = Destination.Servers },
+            onBack = { goBack() },
             onSyncEntitlement = viewModel::syncEntitlement,
             onPurchasePremium = viewModel::purchasePremium,
             onRestorePremium = viewModel::restorePremium,
         )
         Destination.Credits -> CreditsScreen(
-            onBack = { destination = Destination.Servers },
+            onBack = { goBack() },
         )
         Destination.Create -> CreateServer(
-            onBack = { destination = Destination.Servers },
+            onBack = { goBack() },
             onCreate = { name, version, mapgen, players, creative, damage, pvp ->
                 viewModel.create(name, version, mapgen, players, creative, damage, pvp) {
+                    backStack = listOf(Destination.Servers)
                     destination = Destination.Dashboard(it)
                 }
             },
@@ -216,6 +242,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
         is Destination.Dashboard -> {
             val installedPackages by viewModel.installedPackages(current.id).collectAsStateWithLifecycle(emptyList())
             val players by viewModel.players(current.id).collectAsStateWithLifecycle(emptyList())
+            val backups by viewModel.backups(current.id).collectAsStateWithLifecycle(emptyList())
             val gameSettings by viewModel.gameSettings(current.id).collectAsStateWithLifecycle(emptyList())
             val modSettings by viewModel.modSettings(current.id).collectAsStateWithLifecycle(emptyList())
             val crashReport by viewModel.latestCrashReport(current.id).collectAsStateWithLifecycle(null)
@@ -223,18 +250,21 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 profile = profiles.firstOrNull { it.id == current.id },
                 installedPackages = installedPackages,
                 players = players,
+                backups = backups,
                 crashReport = crashReport,
-                onBack = { destination = Destination.Servers },
-                onOpenContentLibrary = { destination = Destination.ContentLibrary(current.id) },
-                onOpenZipImport = { destination = Destination.ZipImport(current.id) },
-                onOpenAdvancedSettings = { destination = Destination.AdvancedSettings(current.id) },
-                onOpenGameSettings = { destination = Destination.GameSettings(current.id) },
-                onOpenModSettings = { destination = Destination.ModSettings(current.id) },
-                onOpenPlayer = { destination = Destination.PlayerMenu(current.id, it) },
+                onBack = { goBack() },
+                onOpenContentLibrary = { navigate(Destination.ContentLibrary(current.id)) },
+                onOpenZipImport = { navigate(Destination.ZipImport(current.id)) },
+                onOpenAdvancedSettings = { navigate(Destination.AdvancedSettings(current.id)) },
+                onOpenGameSettings = { navigate(Destination.GameSettings(current.id)) },
+                onOpenModSettings = { navigate(Destination.ModSettings(current.id)) },
+                onOpenPlayer = { navigate(Destination.PlayerMenu(current.id, it)) },
                 hasGameSettings = gameSettings.isNotEmpty(),
                 hasModSettings = modSettings.isNotEmpty(),
                 onSaveServerSettings = viewModel::updateServerSettings,
                 onCreateBackup = viewModel::createBackup,
+                onRestoreBackup = viewModel::restoreBackup,
+                onDeleteBackup = viewModel::deleteBackup,
                 onEnsureEngineInstalled = viewModel::ensureEngineInstalled,
                 onStartPublicTunnel = viewModel::startPublicTunnel,
                 onStopPublicTunnel = viewModel::stopPublicTunnel,
@@ -249,7 +279,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 installedPackages = installedPackages,
                 state = content,
                 details = contentDetails,
-                onBack = { destination = Destination.Dashboard(current.id) },
+                onBack = { goBack() },
                 onSearch = viewModel::searchContent,
                 onLoadDetail = viewModel::loadContentDetail,
                 onInstall = viewModel::installContent,
@@ -261,7 +291,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 profile = profiles.firstOrNull { it.id == current.id },
                 installedPackages = installedPackages,
                 operation = content.operation,
-                onBack = { destination = Destination.Dashboard(current.id) },
+                onBack = { goBack() },
                 onImport = viewModel::importArchive,
             )
         }
@@ -270,7 +300,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
             AdvancedSettingsScreen(
                 profile = profiles.firstOrNull { it.id == current.id },
                 settings = advancedSettings,
-                onBack = { destination = Destination.Dashboard(current.id) },
+                onBack = { goBack() },
                 onSaveServerSettings = viewModel::updateServerSettings,
                 onSaveAdvancedSetting = viewModel::saveAdvancedSetting,
             )
@@ -285,7 +315,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 emptyDetail = "The installed game does not expose settingtypes.txt options.",
                 icon = Icons.Default.Settings,
                 settings = gameSettings,
-                onBack = { destination = Destination.Dashboard(current.id) },
+                onBack = { goBack() },
                 onSave = viewModel::saveGameSetting,
             )
         }
@@ -299,7 +329,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 emptyDetail = "Installed mods do not expose settingtypes.txt options.",
                 icon = Icons.Default.Code,
                 settings = modSettings,
-                onBack = { destination = Destination.Dashboard(current.id) },
+                onBack = { goBack() },
                 onSave = viewModel::saveModSetting,
             )
         }
@@ -325,7 +355,7 @@ fun LuaNetApp(viewModel: MainViewModel) {
                 player = player,
                 isOnline = player.online || player.name in runtimePlayers,
                 running = runtime?.state in setOf("STARTING", "RUNNING", "STOPPING"),
-                onBack = { destination = Destination.Dashboard(current.id) },
+                onBack = { goBack() },
                 onCommand = { command -> OrchestratorService.command(context, current.id, command) },
                 onSetAdminOffline = viewModel::setPlayerAdminOffline,
                 onSetPrivilegeOffline = viewModel::setPlayerPrivilegeOffline,
@@ -363,6 +393,7 @@ private fun StartupLoadingScreen() {
 @Composable
 private fun ServerList(
     profiles: List<ServerProfileEntity>,
+    account: AccountState,
     onCreate: () -> Unit,
     onOpen: (String) -> Unit,
     onOpenAccount: () -> Unit,
@@ -390,7 +421,7 @@ private fun ServerList(
                 Icon(Icons.Default.Info, "Credits")
             }
             IconButton(onClick = onOpenAccount) {
-                Icon(Icons.Default.AccountCircle, "Account")
+                AccountAvatar(account.photoUrl, Modifier.size(28.dp))
             }
         }) },
         floatingActionButton = {
@@ -479,6 +510,7 @@ private fun ServerList(
 private fun AccountScreen(
     account: AccountState,
     onBack: () -> Unit,
+    onOpenPremium: () -> Unit,
     onSignInEmail: (String, String, (Result<String>) -> Unit) -> Unit,
     onCreateEmailAccount: (String, String, (Result<String>) -> Unit) -> Unit,
     onGoogleSignIn: (Activity, (Result<String>) -> Unit) -> Unit,
@@ -1006,7 +1038,7 @@ private fun AccountHeroCard(account: AccountState) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer) {
-                    Icon(Icons.Default.AccountCircle, null, Modifier.padding(10.dp).size(26.dp), tint = MaterialTheme.colorScheme.primary)
+                    AccountAvatar(account.photoUrl, Modifier.padding(10.dp).size(26.dp))
                 }
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
@@ -1066,6 +1098,20 @@ private fun AccountStatusPill(
                 color = if (error) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface,
             )
         }
+    }
+}
+
+@Composable
+private fun AccountAvatar(photoUrl: String?, modifier: Modifier = Modifier) {
+    if (photoUrl.isNullOrBlank()) {
+        Icon(Icons.Default.AccountCircle, "Account", modifier)
+    } else {
+        AsyncImage(
+            model = photoUrl,
+            contentDescription = "Account",
+            contentScale = ContentScale.Crop,
+            modifier = modifier.clip(CircleShape),
+        )
     }
 }
 
@@ -1248,6 +1294,7 @@ private fun Dashboard(
     profile: ServerProfileEntity?,
     installedPackages: List<InstalledPackageEntity>,
     players: List<ServerPlayerEntity>,
+    backups: List<BackupEntity>,
     crashReport: ServerCrashReportEntity?,
     onBack: () -> Unit,
     onOpenContentLibrary: () -> Unit,
@@ -1260,6 +1307,8 @@ private fun Dashboard(
     hasModSettings: Boolean,
     onSaveServerSettings: ServerSettingsSaver,
     onCreateBackup: (String, (Result<String>) -> Unit) -> Unit,
+    onRestoreBackup: (String, String, (Result<String>) -> Unit) -> Unit,
+    onDeleteBackup: (String, String, (Result<String>) -> Unit) -> Unit,
     onEnsureEngineInstalled: (String, (Result<String>) -> Unit) -> Unit,
     onStartPublicTunnel: (Activity, String, Int, (Result<String>) -> Unit) -> Unit,
     onStopPublicTunnel: (String, (Result<String>) -> Unit) -> Unit,
@@ -1336,7 +1385,7 @@ private fun Dashboard(
                     onOpenModSettings = onOpenModSettings,
                 )
                 DashboardTabKey.SETTINGS -> SettingsPanel(profile, installedPackages, onOpenAdvancedSettings, onSaveServerSettings)
-                DashboardTabKey.BACKUPS -> BackupPanel(profile, onCreateBackup)
+                DashboardTabKey.BACKUPS -> BackupPanel(profile, backups, onCreateBackup, onRestoreBackup, onDeleteBackup)
             }
         }
     }
@@ -2475,18 +2524,84 @@ private fun InstalledContentSummary(packages: List<InstalledPackageEntity>) {
 @Composable
 private fun BackupPanel(
     profile: ServerProfileEntity,
+    backups: List<BackupEntity>,
     onCreate: (String, (Result<String>) -> Unit) -> Unit,
+    onRestore: (String, String, (Result<String>) -> Unit) -> Unit,
+    onDelete: (String, String, (Result<String>) -> Unit) -> Unit,
 ) {
     var message by remember { mutableStateOf<String?>(null) }
-    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("Backups", style = MaterialTheme.typography.headlineSmall)
-        Text("Backups contain the profile world, game, mods, and configuration.")
-        Button(
-            onClick = { onCreate(profile.id) { result -> message = result.fold({ it }, { it.message ?: "Backup failed" }) } },
-            enabled = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED),
-            modifier = Modifier.fillMaxWidth(),
-        ) { Text("Create manual backup") }
-        message?.let { Text(it) }
+    var restoreTarget by remember { mutableStateOf<BackupEntity?>(null) }
+    var deleteTarget by remember { mutableStateOf<BackupEntity?>(null) }
+    val canChange = profile.state in setOf(ServerState.STOPPED, ServerState.CRASHED)
+    LazyColumn(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        item { Text("Backups", style = MaterialTheme.typography.headlineSmall) }
+        item {
+            Button(
+                onClick = { onCreate(profile.id) { result -> message = result.fold({ it }, { it.message ?: "Backup failed" }) } },
+                enabled = canChange,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("Create manual backup") }
+        }
+        message?.let { item { Text(it) } }
+        if (backups.isEmpty()) {
+            item { EmptySection(Icons.Default.Backup, "No backups yet", "Create one before changing engines, games or mods.") }
+        } else {
+            items(backups, key = { it.id }) { backup ->
+                Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Default.Backup, null, tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(if (backup.automatic) "Automatic backup" else "Manual backup", style = MaterialTheme.typography.titleMedium)
+                                Text("${formatCrashTime(backup.createdAt)} · ${formatBytes(backup.sizeBytes)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        if (backup.reason.isNotBlank()) Text(backup.reason, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = { restoreTarget = backup },
+                                enabled = canChange,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Restore") }
+                            FilledTonalButton(
+                                onClick = { deleteTarget = backup },
+                                enabled = canChange,
+                                modifier = Modifier.weight(1f),
+                            ) { Text("Delete") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    restoreTarget?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { restoreTarget = null },
+            title = { Text("Restore backup?") },
+            text = { Text("The current world, content and server configuration will be replaced.") },
+            confirmButton = {
+                Button(onClick = {
+                    restoreTarget = null
+                    onRestore(profile.id, backup.id) { result -> message = result.fold({ it }, { it.message ?: "Restore failed" }) }
+                }) { Text("Restore") }
+            },
+            dismissButton = { TextButton(onClick = { restoreTarget = null }) { Text("Cancel") } },
+        )
+    }
+    deleteTarget?.let { backup ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Delete backup?") },
+            text = { Text("This cannot be undone.") },
+            confirmButton = {
+                Button(onClick = {
+                    deleteTarget = null
+                    onDelete(profile.id, backup.id) { result -> message = result.fold({ it }, { it.message ?: "Delete failed" }) }
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
+        )
     }
 }
 

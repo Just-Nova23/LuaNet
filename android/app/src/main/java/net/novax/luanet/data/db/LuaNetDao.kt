@@ -47,12 +47,21 @@ interface LuaNetDao {
     @Query("SELECT * FROM backups WHERE profileId=:profileId ORDER BY createdAt DESC")
     fun observeBackups(profileId: String): Flow<List<BackupEntity>>
 
+    @Query("SELECT * FROM backups WHERE profileId=:profileId AND id=:id")
+    suspend fun backup(profileId: String, id: String): BackupEntity?
+
     @Insert suspend fun insertBackup(backup: BackupEntity)
 
     @Query("SELECT * FROM backups WHERE profileId=:profileId AND automatic=1 ORDER BY createdAt DESC")
     suspend fun automaticBackups(profileId: String): List<BackupEntity>
 
     @Delete suspend fun deleteBackup(backup: BackupEntity)
+
+    @Query("DELETE FROM installed_packages WHERE profileId=:profileId")
+    suspend fun deletePackages(profileId: String)
+
+    @Query("DELETE FROM server_config_settings WHERE profileId=:profileId")
+    suspend fun deleteConfigSettings(profileId: String)
 
     @Query("SELECT * FROM server_players WHERE profileId=:profileId ORDER BY online DESC, lastSeenAt DESC, name COLLATE NOCASE")
     fun observePlayers(profileId: String): Flow<List<ServerPlayerEntity>>

@@ -88,6 +88,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun installedPackages(profileId: String) = repository.observePackages(profileId)
     fun players(profileId: String) = repository.observePlayers(profileId)
+    fun backups(profileId: String) = container.database.dao().observeBackups(profileId)
     fun latestCrashReport(profileId: String) = repository.observeLatestCrashReport(profileId)
     fun advancedSettings(profileId: String) = repository.observeConfigSettings(profileId)
     fun modSettings(profileId: String) = repository.observeModSettings(profileId)
@@ -168,6 +169,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     profileId, repository.profileDirectory(profileId), "Manual backup", automatic = false,
                 )
                 "Backup created (${backup.sizeBytes / 1024} KiB)"
+            })
+        }
+    }
+
+    fun restoreBackup(profileId: String, backupId: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                val profile = requireNotNull(repository.profile(profileId)) { "Server profile not found" }
+                require(profile.state.name in setOf("STOPPED", "CRASHED")) { "Stop the server before restoring a backup" }
+                container.backups.restore(profileId, backupId, repository.profileDirectory(profileId))
+                "Backup restored"
+            })
+        }
+    }
+
+    fun deleteBackup(profileId: String, backupId: String, onResult: (Result<String>) -> Unit) {
+        viewModelScope.launch {
+            onResult(runCatching {
+                val deleted = container.backups.delete(profileId, backupId)
+                if (deleted) "Backup deleted" else "Backup not found"
             })
         }
     }
@@ -510,6 +531,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             signedIn = session.signedIn,
             email = session.email,
             displayName = session.displayName,
+            photoUrl = session.photoUrl,
             emailVerified = session.emailVerified,
             tokenConfigured = session.signedIn,
             tier = tier,
@@ -523,6 +545,7 @@ data class AccountState(
     val signedIn: Boolean = false,
     val email: String? = null,
     val displayName: String? = null,
+    val photoUrl: String? = null,
     val emailVerified: Boolean = false,
     val tokenConfigured: Boolean = false,
     val tier: SubscriptionTier = SubscriptionTier.FREE,
