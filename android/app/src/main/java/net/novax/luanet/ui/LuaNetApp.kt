@@ -864,8 +864,8 @@ private fun CreditsScreen(onBack: () -> Unit) {
                 CreditLinkCard(
                     icon = Icons.Default.Info,
                     title = "Privacy policy",
-                    detail = "luanet.novaxhosting.com/privacy.html",
-                    url = "https://luanet.novaxhosting.com/privacy.html",
+                    detail = "luanet.novaxhosting.com/privacy",
+                    url = "https://luanet.novaxhosting.com/privacy",
                     context = context,
                 )
             }
@@ -873,8 +873,8 @@ private fun CreditsScreen(onBack: () -> Unit) {
                 CreditLinkCard(
                     icon = Icons.Default.Info,
                     title = "Terms",
-                    detail = "luanet.novaxhosting.com/terms.html",
-                    url = "https://luanet.novaxhosting.com/terms.html",
+                    detail = "luanet.novaxhosting.com/terms",
+                    url = "https://luanet.novaxhosting.com/terms",
                     context = context,
                 )
             }
@@ -882,8 +882,8 @@ private fun CreditsScreen(onBack: () -> Unit) {
                 CreditLinkCard(
                     icon = Icons.Default.AccountCircle,
                     title = "Account deletion",
-                    detail = "luanet.novaxhosting.com/delete-account.html",
-                    url = "https://luanet.novaxhosting.com/delete-account.html",
+                    detail = "luanet.novaxhosting.com/delete-account",
+                    url = "https://luanet.novaxhosting.com/delete-account",
                     context = context,
                 )
             }
@@ -891,8 +891,8 @@ private fun CreditsScreen(onBack: () -> Unit) {
                 CreditLinkCard(
                     icon = Icons.Default.Code,
                     title = "Licenses",
-                    detail = "luanet.novaxhosting.com/licenses.html",
-                    url = "https://luanet.novaxhosting.com/licenses.html",
+                    detail = "luanet.novaxhosting.com/licenses",
+                    url = "https://luanet.novaxhosting.com/licenses",
                     context = context,
                 )
             }

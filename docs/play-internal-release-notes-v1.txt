@@ -7,3 +7,4 @@ Initial LuaNet internal testing build.
 - NovaX public access integration.
 - Ad-supported Free public access flow and Premium purchase flow.
 - Legal links for privacy, terms, account deletion, and licenses.
+- Clean website legal URLs without `.html`.

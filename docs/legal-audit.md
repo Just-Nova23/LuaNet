@@ -32,8 +32,8 @@ should still be reviewed by the Play Console account owner or counsel.
 - In-app purchases/subscriptions: Yes.
 - Data encrypted in transit: Yes.
 - Data deletion: Yes, in-app and web.
-- Privacy policy URL: `https://luanet.novaxhosting.com/privacy.html`.
-- Account deletion URL: `https://luanet.novaxhosting.com/delete-account.html`.
+- Privacy policy URL: `https://luanet.novaxhosting.com/privacy`.
+- Account deletion URL: `https://luanet.novaxhosting.com/delete-account`.
 
 ## Remaining before public production
 

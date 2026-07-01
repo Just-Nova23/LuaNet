@@ -64,7 +64,7 @@ Do not disclose these as server-collected by NovaX unless the implementation cha
 
 - Provides account deletion in app: Yes.
 - Provides account deletion web link: Yes.
-- Web URL: `https://luanet.novaxhosting.com/delete-account.html`.
+- Web URL: `https://luanet.novaxhosting.com/delete-account`.
 - Data deleted: account, tunnel allocations, entitlements, Firebase Auth user.
 - Data retained: security/anti-abuse logs up to 30 days, and provider-side records under
   Google/Firebase/AdMob/Play retention rules.

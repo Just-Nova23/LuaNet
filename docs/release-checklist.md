@@ -6,8 +6,8 @@ The beta is not releasable until every item below is evidenced in the release re
 - API is Cloudflare-proxied; tunnel and play records are DNS-only.
 - FRPS presents a publicly trusted certificate and refuses non-TLS control connections.
 - `luanet@novaxhosting.com` exists and is monitored.
-- Privacy policy URL works: `https://luanet.novaxhosting.com/privacy.html`.
-- Account deletion URL works: `https://luanet.novaxhosting.com/delete-account.html`.
+- Privacy policy URL works: `https://luanet.novaxhosting.com/privacy`.
+- Account deletion URL works: `https://luanet.novaxhosting.com/delete-account`.
 - Terms, acceptable use, cookie notice, and license pages are linked from the website footer.
 - All 17 engine sources match `engine/catalog.json`; builds and smoke tests pass on ARM64.
 - One world can be joined from the same phone, LAN, mobile data, and NovaX.
